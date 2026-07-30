@@ -1,0 +1,47 @@
+{
+  "name": "saira-assistant",
+  "version": "0.1.0",
+  "description": "A Siri-like Windows voice assistant with pluggable STT/LLM/TTS providers",
+  "main": "dist/main/index.js",
+  "author": "Kapil564",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup",
+    "start": "electron .",
+    "pack": "electron-builder",
+    "lint": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.16.0",
+    "better-sqlite3": "^11.0.0",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.31.0",
+    "electron": "^31.0.0",
+    "groq-sdk": "^0.5.0",
+    "node-cron": "^3.0.3",
+    "node-notifier": "^10.0.1",
+    "node-record-lpcm16": "^1.0.1",
+    "openai": "^4.52.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "socket.io": "^4.7.0",
+    "socket.io-client": "^4.7.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.5.10",
+    "drizzle-kit": "^0.22.0",
+    "electron-builder": "^24.13.0",
+    "tailwindcss": "^3.4.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.4.0"
+  }
+}
