@@ -30,9 +30,10 @@ Example output for "remind me to call mom tomorrow at 10am":
 {"intent":"reminder.create","params":{"text":"call mom","due":"2026-07-31T10:00:00"}}`;
 
 class OpenAiLLM implements LLMProvider {
-  private apiKey: ***  private model: string;
+  private apiKey: string;
+  private model: string;
 
-  constructor(apiKey: *** model: string) {
+  constructor(apiKey: string, model: string) {
     this.apiKey = apiKey;
     this.model = model;
   }
@@ -44,7 +45,7 @@ class OpenAiLLM implements LLMProvider {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: *** ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
         model: this.model,
@@ -68,9 +69,10 @@ class OpenAiLLM implements LLMProvider {
 }
 
 class GroqLLM implements LLMProvider {
-  private apiKey: ***  private model: string;
+  private apiKey: string;
+  private model: string;
 
-  constructor(apiKey: *** model: string) {
+  constructor(apiKey: string, model: string) {
     this.apiKey = apiKey;
     this.model = model || 'llama3-8b-8192';
   }
@@ -82,7 +84,7 @@ class GroqLLM implements LLMProvider {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: *** ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
         model: this.model,
@@ -106,9 +108,10 @@ class GroqLLM implements LLMProvider {
 }
 
 class GeminiLLM implements LLMProvider {
-  private apiKey: ***  private model: string;
+  private apiKey: string;
+  private model: string;
 
-  constructor(apiKey: *** model: string) {
+  constructor(apiKey: string, model: string) {
     this.apiKey = apiKey;
     this.model = model || 'gemini-1.5-flash';
   }

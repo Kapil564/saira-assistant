@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
-import path from 'node:path';
-import fs from 'node:fs';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { config } from '../shared/config';
 
 export interface TTSProvider {
@@ -13,7 +14,7 @@ class SAPI5TTS implements TTSProvider {
     const script = `
       Add-Type -AssemblyName System.Speech;
       $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;
-      $synth.Speak("${escaped}");
+      $synth.Speak(\"${escaped}\");
     `;
     return new Promise((resolve, reject) => {
       const child = spawn('powershell.exe', ['-Command', script], { windowsHide: true });
@@ -23,10 +24,24 @@ class SAPI5TTS implements TTSProvider {
   }
 }
 
-class ElevenLabsTTS implements TTSProvider {
-  private apiKey: ***  private voiceId: string;
+class LinuxTTS implements TTSProvider {
+  async speak(text: string): Promise<void> {
+    const trimmed = text.replace(/"/g, '\\"');
+    const command = os.platform() === 'darwin' ? 'say' : 'espeak';
+    const args = os.platform() === 'darwin' ? [trimmed] : ['-v', 'en', trimmed];
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args);
+      child.on('error', reject);
+      child.on('close', resolve);
+    });
+  }
+}
 
-  constructor(apiKey: *** voiceId: string) {
+class ElevenLabsTTS implements TTSProvider {
+  private apiKey: string;
+  private voiceId: string;
+
+  constructor(apiKey: string, voiceId: string) {
     this.apiKey = apiKey;
     this.voiceId = voiceId || '21m00Tcm4TlvDq8ikWAM';
   }
@@ -60,9 +75,10 @@ class ElevenLabsTTS implements TTSProvider {
 }
 
 class AzureTTS implements TTSProvider {
-  private apiKey: ***  private region: string;
+  private apiKey: string;
+  private region: string;
 
-  constructor(apiKey: *** region: string) {
+  constructor(apiKey: string, region: string) {
     this.apiKey = apiKey;
     this.region = region;
   }
@@ -94,7 +110,7 @@ class AzureTTS implements TTSProvider {
         headers: {
           'Content-Type': 'application/ssml+xml',
           'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3',
-          Authorization: *** ${token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: ssml,
       },
@@ -131,6 +147,11 @@ async function playAudioBuffer(buffer: Buffer): Promise<void> {
   });
 }
 
+function createFallbackTTS(): TTSProvider {
+  if (os.platform() === 'win32') return new SAPI5TTS();
+  return new LinuxTTS();
+}
+
 export function createTTSProvider(): TTSProvider {
   switch (config.tts.provider) {
     case 'elevenlabs':
@@ -145,5 +166,5 @@ export function createTTSProvider(): TTSProvider {
     default:
       break;
   }
-  return new SAPI5TTS();
+  return createFallbackTTS();
 }

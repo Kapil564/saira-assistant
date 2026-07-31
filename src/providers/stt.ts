@@ -7,7 +7,9 @@ export interface STTProvider {
 }
 
 class OpenAiSTT implements STTProvider {
-  private apiKey: ***  constructor(apiKey: *** {
+  private apiKey: string;
+
+  constructor(apiKey: string) {
     this.apiKey = apiKey;
   }
 
@@ -15,14 +17,14 @@ class OpenAiSTT implements STTProvider {
     if (!this.apiKey) throw new Error('OpenAI API key is missing.');
 
     const formData = new FormData();
-    const blob = new Blob([audioBuffer], { type: 'audio/wav' });
+    const blob = new Blob([audioBuffer as unknown as BlobPart], { type: 'audio/wav' });
     formData.append('file', blob, 'recording.wav');
     formData.append('model', 'whisper-1');
     formData.append('language', 'en');
 
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
-      headers: { Authorization: *** ${this.apiKey}` },
+      headers: { Authorization: `Bearer ${this.apiKey}` },
       body: formData as unknown as BodyInit,
     });
 
@@ -36,7 +38,9 @@ class OpenAiSTT implements STTProvider {
 }
 
 class GroqSTT implements STTProvider {
-  private apiKey: ***  constructor(apiKey: *** {
+  private apiKey: string;
+
+  constructor(apiKey: string) {
     this.apiKey = apiKey;
   }
 
@@ -44,14 +48,14 @@ class GroqSTT implements STTProvider {
     if (!this.apiKey) throw new Error('Groq API key is missing.');
 
     const formData = new FormData();
-    const blob = new Blob([audioBuffer], { type: 'audio/wav' });
+    const blob = new Blob([audioBuffer as unknown as BlobPart], { type: 'audio/wav' });
     formData.append('file', blob, 'recording.wav');
     formData.append('model', 'whisper-large-v3');
     formData.append('language', 'en');
 
     const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
-      headers: { Authorization: *** ${this.apiKey}` },
+      headers: { Authorization: `Bearer ${this.apiKey}` },
       body: formData as unknown as BodyInit,
     });
 
@@ -73,7 +77,7 @@ class OfflineWhisperSTT implements STTProvider {
 
   async transcribe(audioBuffer: Buffer): Promise<TranscriptionResult> {
     const formData = new FormData();
-    const blob = new Blob([audioBuffer], { type: 'audio/wav' });
+    const blob = new Blob([audioBuffer as unknown as BlobPart], { type: 'audio/wav' });
     formData.append('audio', blob, 'recording.wav');
 
     const response = await fetch(`${this.baseUrl}/transcribe`, {

@@ -14,18 +14,18 @@ const azureKey = process.env.AZURE_SPEECH_KEY || '';
 export const config = {
   stt: {
     provider: sttSchema.default('openai').parse(process.env.STT_PROVIDER),
-    apiKey: *** || groqKey,
+    apiKey: openAiKey || groqKey,
     offlineBaseUrl: process.env.OFFLINE_STT_URL || 'http://localhost:8000',
   },
   llm: {
     provider: providerSchema.default('openai').parse(process.env.LLM_PROVIDER),
-    apiKey: *** || geminiKey || groqKey,
+    apiKey: openAiKey || geminiKey || groqKey,
     model: process.env.LLM_MODEL || 'gpt-4o-mini',
     baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
   },
   tts: {
     provider: ttsSchema.default('sapi5').parse(process.env.TTS_PROVIDER),
-    apiKey: *** || azureKey,
+    apiKey: elevenLabsKey || azureKey,
     voiceId: process.env.ELEVENLABS_VOICE_ID || '',
     region: process.env.AZURE_SPEECH_REGION || '',
   },

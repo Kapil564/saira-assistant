@@ -31,8 +31,7 @@ export async function getDueReminders(database: typeof db, now: Date) {
   return database
     .select()
     .from(reminders)
-    .where(lte(reminders.due, now.toISOString()))
-    .where(eq(reminders.notified, 0))
+    .where(lte(reminders.due, now.toISOString()) && eq(reminders.notified, 0))
     .all();
 }
 
