@@ -176,6 +176,80 @@ class OllamaLLM implements LLMProvider {
   }
 }
 
+class CloudflareLLM implements LLMProvider {
+  private accountId: string;
+  private apiToken: string;
+  private gatewayId: string;
+  private model: string;
+
+  constructor(accountId: string, apiToken: string, gatewayId = '', model = '@cf/meta/llama-3.1-8b-instruct') {
+    this.accountId = accountId;
+    this.apiToken = apiToken;
+    this.gatewayId = gatewayId;
+    this.model = model;
+  }
+
+  async parseIntent(text: string): Promise<IntentResult> {
+    if (!this.apiToken) throw new Error('Cloudflare API Token is missing.');
+
+    if (this.gatewayId && this.accountId) {
+      const response = await fetch(
+        `https://gateway.ai.cloudflare.com/v1/${this.accountId}/${this.gatewayId}/openai/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.apiToken}`,
+          },
+          body: JSON.stringify({
+            model: this.model || 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: SYSTEM_PROMPT },
+              { role: 'user', content: text },
+            ],
+            response_format: { type: 'json_object' },
+            temperature: 0.2,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Cloudflare AI Gateway LLM failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content || '{}';
+      return JSON.parse(content) as IntentResult;
+    }
+
+    if (!this.accountId) throw new Error('Cloudflare Account ID is missing.');
+
+    const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/ai/run/${this.model}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiToken}`,
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: text },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Cloudflare Workers AI LLM failed: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const content = data.result?.response || data.response || '{}';
+    const cleaned = content.replace(/```json|```/g, '').trim();
+    return JSON.parse(cleaned) as IntentResult;
+  }
+}
+
 async function shouldUseLocal(): Promise<boolean> {
   const hasApiKey = Boolean(config.llm.apiKey);
   if (!hasApiKey) return true;
@@ -191,6 +265,13 @@ export async function createLLMProvider(): Promise<LLMProvider> {
   }
 
   switch (config.llm.provider) {
+    case 'cloudflare':
+      return new CloudflareLLM(
+        config.cloudflare.accountId,
+        config.cloudflare.apiToken,
+        config.cloudflare.gatewayId,
+        config.cloudflare.llmModel,
+      );
     case 'gemini':
       return new GeminiLLM(config.llm.apiKey, config.llm.model);
     case 'groq':

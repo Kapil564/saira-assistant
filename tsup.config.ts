@@ -1,21 +1,32 @@
 import { defineConfig } from 'tsup';
 
-export default defineConfig({
-  entry: {
-    main: './src/main/index.ts',
-    'main/preload': './src/main/preload.ts',
-    renderer: './src/renderer/index.tsx',
-    'db/migrate': './src/db/migrate.ts',
+export default defineConfig([
+  {
+    entry: {
+      'main/index': './src/main/index.ts',
+      'main/preload': './src/main/preload.ts',
+      'db/migrate': './src/db/migrate.ts',
+    },
+    format: ['cjs'],
+    platform: 'node',
+    target: 'node20',
+    bundle: true,
+    clean: true,
+    sourcemap: true,
+    external: ['electron', 'better-sqlite3'],
   },
-  format: ['cjs'],
-  platform: 'node',
-  target: 'node20',
-  bundle: true,
-  splitting: false,
-  sourcemap: true,
-  clean: true,
-  external: ['electron'],
-  esbuildOptions: (options) => {
-    options.jsx = 'automatic';
+  {
+    entry: {
+      'renderer/index': './src/renderer/index.tsx',
+    },
+    format: ['iife'],
+    platform: 'browser',
+    target: 'chrome120',
+    bundle: true,
+    sourcemap: true,
+    noExternal: ['react', 'react-dom'],
+    esbuildOptions: (options) => {
+      options.jsx = 'automatic';
+    },
   },
-});
+]);

@@ -12,7 +12,8 @@
     "pack": "electron-builder",
     "lint": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "rebuild": "electron-rebuild"
   },
   "dependencies": {
     "@google/generative-ai": "^0.16.0",
