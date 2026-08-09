@@ -1,4 +1,4 @@
-import { eq, lte } from 'drizzle-orm';
+import { and, eq, lte } from 'drizzle-orm';
 import { db } from './index';
 import { reminders, todos } from './schema';
 
@@ -31,7 +31,7 @@ export async function getDueReminders(database: typeof db, now: Date) {
   return database
     .select()
     .from(reminders)
-    .where(lte(reminders.due, now.toISOString()) && eq(reminders.notified, 0))
+    .where(and(lte(reminders.due, now.toISOString()), eq(reminders.notified, 0)))
     .all();
 }
 

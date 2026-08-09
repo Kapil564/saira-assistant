@@ -31,6 +31,12 @@ function createWindow() {
 
   window.loadFile(path.join(__dirname, '../../index.html'));
 
+  window.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    console.log(`[Renderer Console]: ${message}`);
+  });
+
+  window.webContents.openDevTools({ mode: 'detach' });
+
   window.on('closed', () => {
     window = null;
   });
@@ -76,6 +82,46 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
 
+import { io, type Socket } from 'socket.io-client';
+import { config } from '../shared/config';
+
+let socket: Socket | null = null;
+
+function getSocket(): Socket {
+  if (!socket) {
+    socket = io(`http://localhost:${config.server.port}`);
+
+    socket.on('connect', () => {
+      console.log('[Main Socket Bridge] Connected to Orchestrator on port', config.server.port);
+    });
+
+    socket.on('transcript', (data) => {
+      window?.webContents.send('transcript', data);
+    });
+
+    socket.on('response', (data) => {
+      window?.webContents.send('response', data);
+    });
+
+    socket.on('error', (data) => {
+      window?.webContents.send('error', data);
+    });
+
+    socket.on('connect_error', (err) => {
+      console.error('[Main Socket Connection Error]:', err.message);
+    });
+  }
+  return socket;
+}
+
 ipcMain.on('hide-window', () => {
   window?.hide();
+});
+
+ipcMain.on('send-audio', (_event, audio: ArrayBuffer) => {
+  getSocket().emit('audio', Buffer.from(audio));
+});
+
+ipcMain.on('send-text', (_event, text: string) => {
+  getSocket().emit('text', text);
 });

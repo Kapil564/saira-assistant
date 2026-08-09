@@ -72,7 +72,7 @@ Each AI task is decoupled into independent provider interfaces with automatic fa
 |---|---|---|
 | **Speech-to-Text (STT)** | OpenAI Whisper, Groq Whisper, Cloudflare Workers AI (`@cf/openai/whisper`), local `faster-whisper` | Local `faster-whisper` server |
 | **Intent Model (LLM)** | OpenAI (`gpt-4o-mini`), Google Gemini, Groq (Llama), Cloudflare Workers AI (`@cf/meta/llama-3.1-8b-instruct`), Ollama | Local Ollama (`llama3.1`) |
-| **Text-to-Speech (TTS)** | Windows SAPI5 (offline native), ElevenLabs, Azure Neural TTS | Windows SAPI5 (Powershell `System.Speech`) |
+| **Text-to-Speech (TTS)** | Windows SAPI5 (offline native), ElevenLabs, Cloudflare Workers AI (`elevenlabs/eleven-multilingual-v2`), Azure Neural TTS | Windows SAPI5 (Powershell `System.Speech`) |
 
 ### E. Action Executor & Storage ([src/actions/](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/actions) & [src/db/](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/db))
 - **Action Executor**: Takes validated intent JSON (e.g. `reminder.create`, `todo.create`, `chat.respond`) and performs the underlying operations.

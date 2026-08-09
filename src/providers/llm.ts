@@ -29,6 +29,22 @@ Important rules:
 Example output for "remind me to call mom tomorrow at 10am":
 {"intent":"reminder.create","params":{"text":"call mom","due":"2026-07-31T10:00:00"}}`;
 
+function parseContentToIntent(content: unknown): IntentResult {
+  if (typeof content === 'object' && content !== null) {
+    return content as IntentResult;
+  }
+  const str = typeof content === 'string' ? content : JSON.stringify(content || {});
+  const cleaned = str.replace(/```json|```/g, '').trim();
+  try {
+    return JSON.parse(cleaned) as IntentResult;
+  } catch {
+    return {
+      intent: 'chat.respond',
+      params: { message: cleaned },
+    };
+  }
+}
+
 class OpenAiLLM implements LLMProvider {
   private apiKey: string;
   private model: string;
@@ -59,12 +75,13 @@ class OpenAiLLM implements LLMProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAI LLM failed: ${response.statusText}`);
+      const errText = await response.text();
+      throw new Error(`OpenAI LLM failed (${response.status}): ${errText || response.statusText}`);
     }
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content;
-    return JSON.parse(content) as IntentResult;
+    return parseContentToIntent(content);
   }
 }
 
@@ -98,12 +115,13 @@ class GroqLLM implements LLMProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`Groq LLM failed: ${response.statusText}`);
+      const errText = await response.text();
+      throw new Error(`Groq LLM failed (${response.status}): ${errText || response.statusText}`);
     }
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content;
-    return JSON.parse(content) as IntentResult;
+    return parseContentToIntent(content);
   }
 }
 
@@ -134,13 +152,13 @@ class GeminiLLM implements LLMProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`Gemini LLM failed: ${response.statusText}`);
+      const errText = await response.text();
+      throw new Error(`Gemini LLM failed (${response.status}): ${errText || response.statusText}`);
     }
 
     const data = await response.json();
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-    const cleaned = content.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned) as IntentResult;
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    return parseContentToIntent(content);
   }
 }
 
@@ -166,13 +184,13 @@ class OllamaLLM implements LLMProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`Ollama LLM failed: ${response.statusText}`);
+      const errText = await response.text();
+      throw new Error(`Ollama LLM failed (${response.status}): ${errText || response.statusText}`);
     }
 
     const data = await response.json();
-    const content = data.response || '{}';
-    const cleaned = content.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned) as IntentResult;
+    const content = data.response;
+    return parseContentToIntent(content);
   }
 }
 
@@ -214,12 +232,13 @@ class CloudflareLLM implements LLMProvider {
       );
 
       if (!response.ok) {
-        throw new Error(`Cloudflare AI Gateway LLM failed: ${response.statusText}`);
+        const errText = await response.text();
+        throw new Error(`Cloudflare AI Gateway LLM failed (${response.status}): ${errText || response.statusText}`);
       }
 
       const data = await response.json();
-      const content = data.choices?.[0]?.message?.content || '{}';
-      return JSON.parse(content) as IntentResult;
+      const content = data.choices?.[0]?.message?.content;
+      return parseContentToIntent(content);
     }
 
     if (!this.accountId) throw new Error('Cloudflare Account ID is missing.');
@@ -240,13 +259,13 @@ class CloudflareLLM implements LLMProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`Cloudflare Workers AI LLM failed: ${response.statusText}`);
+      const errText = await response.text();
+      throw new Error(`Cloudflare Workers AI LLM failed (${response.status}): ${errText || response.statusText}`);
     }
 
     const data = await response.json();
-    const content = data.result?.response || data.response || '{}';
-    const cleaned = content.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned) as IntentResult;
+    const content = data.result?.response ?? data.result ?? data.response;
+    return parseContentToIntent(content);
   }
 }
 
