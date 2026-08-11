@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import type { LLMProvider } from '../providers/llm';
+import { getAppPaths } from '../shared/paths';
 import {
   getSessionMessageCount,
   getOlderMessagesToPrune,
@@ -12,7 +13,9 @@ import {
   type DbMessage,
 } from '../db/session-store';
 
-const ARCHIVE_DIR = path.join(process.cwd(), 'archive', 'sessions');
+function getArchiveDir(): string {
+  return getAppPaths().archiveDir;
+}
 const MESSAGE_THRESHOLD = 20;
 const KEEP_BUFFER_COUNT = 10;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -28,8 +31,9 @@ export function recordMessageActivity(sessionId: number): void {
  * Ensures archive/sessions directory exists.
  */
 function ensureArchiveDir(): void {
-  if (!fs.existsSync(ARCHIVE_DIR)) {
-    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+  const archiveDir = getArchiveDir();
+  if (!fs.existsSync(archiveDir)) {
+    fs.mkdirSync(archiveDir, { recursive: true });
   }
 }
 
@@ -41,8 +45,9 @@ export function archivePrunedMessages(sessionId: number, messagesToPrune: DbMess
 
   ensureArchiveDir();
 
+  const archiveDir = getArchiveDir();
   const startDate = messagesToPrune[0].createdAt.split('T')[0] || new Date().toISOString().split('T')[0];
-  const archivePath = path.join(ARCHIVE_DIR, `${startDate}-session-${sessionId}.jsonl.gz`);
+  const archivePath = path.join(archiveDir, `${startDate}-session-${sessionId}.jsonl.gz`);
 
   const jsonlLines = messagesToPrune.map((msg) => JSON.stringify(msg)).join('\n') + '\n';
 

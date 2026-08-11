@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { getAppPaths } from '../shared/paths';
 
 export interface MemoryFrontmatter {
   category: string;
@@ -55,22 +56,26 @@ class Mutex {
 
 const memoryWriteMutex = new Mutex();
 
-const MEMORY_DIR = path.join(process.cwd(), 'memory');
+function getMemoryDir(): string {
+  return getAppPaths().memoryDir;
+}
 
 /**
  * Ensures initial default memory directory and core files exist.
  */
 export function initMemoryStorage(): void {
-  if (!fs.existsSync(MEMORY_DIR)) {
-    fs.mkdirSync(MEMORY_DIR, { recursive: true });
+  const memoryDir = getMemoryDir();
+
+  if (!fs.existsSync(memoryDir)) {
+    fs.mkdirSync(memoryDir, { recursive: true });
   }
 
-  const projectsDir = path.join(MEMORY_DIR, 'projects');
+  const projectsDir = path.join(memoryDir, 'projects');
   if (!fs.existsSync(projectsDir)) {
     fs.mkdirSync(projectsDir, { recursive: true });
   }
 
-  const peopleDir = path.join(MEMORY_DIR, 'people');
+  const peopleDir = path.join(memoryDir, 'people');
   if (!fs.existsSync(peopleDir)) {
     fs.mkdirSync(peopleDir, { recursive: true });
   }
@@ -99,7 +104,7 @@ function ensureFileExists(
   frontmatter: Partial<MemoryFrontmatter>,
   defaultBullets: string[]
 ): void {
-  const fullPath = path.join(MEMORY_DIR, relPath);
+  const fullPath = path.join(getMemoryDir(), relPath);
   if (!fs.existsSync(fullPath)) {
     const today = new Date().toISOString().split('T')[0];
     const content = formatMemoryFile({
@@ -197,7 +202,9 @@ function extractKeywords(text: string): Set<string> {
  * Recursively scans memory/ directory and updates the in-memory manifest cache.
  */
 export function refreshManifest(): MemoryManifestItem[] {
-  if (!fs.existsSync(MEMORY_DIR)) {
+  const memoryDir = getMemoryDir();
+
+  if (!fs.existsSync(memoryDir)) {
     initMemoryStorage();
   }
 
@@ -232,7 +239,7 @@ export function refreshManifest(): MemoryManifestItem[] {
     }
   }
 
-  scanDir(MEMORY_DIR);
+  scanDir(memoryDir);
   manifestCache = items;
   return items;
 }
@@ -248,7 +255,7 @@ export function getManifest(): MemoryManifestItem[] {
  * Loads profile.md (ALWAYS loaded).
  */
 export function getProfileMemory(): string {
-  const profilePath = path.join(MEMORY_DIR, 'profile.md');
+  const profilePath = path.join(getMemoryDir(), 'profile.md');
   if (fs.existsSync(profilePath)) {
     return fs.readFileSync(profilePath, 'utf-8');
   }
@@ -304,12 +311,13 @@ export async function saveFactToMemory(params: {
 
   try {
     initMemoryStorage();
+    const memoryDir = getMemoryDir();
 
-    // Standardize path relative to MEMORY_DIR
+    // Standardize path relative to memoryDir
     let relPath = params.targetFile.replace(/^memory[\/\\]/, '');
     if (!relPath.endsWith('.md')) relPath += '.md';
 
-    const fullPath = path.join(MEMORY_DIR, relPath);
+    const fullPath = path.join(memoryDir, relPath);
     const parentDir = path.dirname(fullPath);
     if (!fs.existsSync(parentDir)) {
       fs.mkdirSync(parentDir, { recursive: true });

@@ -1,11 +1,14 @@
-import path from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
+import { getAppPaths, ensureUserDataDirectories } from '../shared/paths';
 
-const dbPath = path.join(process.cwd(), 'assistant.db');
-const sqlite = new Database(dbPath);
+ensureUserDataDirectories();
+
+const paths = getAppPaths();
+console.log(`[DB Migrate] Running migrations against: ${paths.dbPath}`);
+const sqlite = new Database(paths.dbPath);
 const db = drizzle(sqlite);
 
-migrate(db, { migrationsFolder: './drizzle' });
+migrate(db, { migrationsFolder: paths.migrationsFolder });
 console.log('Migration complete.');

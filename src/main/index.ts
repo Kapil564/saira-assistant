@@ -1,12 +1,14 @@
-import { app, globalShortcut, ipcMain, Tray, BrowserWindow, Menu, nativeImage, screen } from 'electron';
+import { app, globalShortcut, ipcMain, Tray, BrowserWindow, Menu, nativeImage, screen, powerMonitor } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createOrchestrator } from '../orchestrator';
-import { startReminderPolling } from '../orchestrator/scheduler';
+import { startReminderPolling, checkAndFireDueReminders } from '../orchestrator/scheduler';
+import type { TTSProvider } from '../providers/tts';
 
 let tray: Tray | null = null;
 let window: BrowserWindow | null = null;
 let isQuitting = false;
+let orchestratorTts: TTSProvider | null = null;
 
 function getAppIcon() {
   const iconPath = path.join(__dirname, '../../assets/icon.png');
@@ -27,6 +29,54 @@ function positionTopRight() {
   } catch (err) {
     console.error('[Main] Failed to position window in top-right:', err);
   }
+}
+
+function isAutostartEnabled(): boolean {
+  try {
+    return app.getLoginItemSettings().openAtLogin;
+  } catch {
+    return false;
+  }
+}
+
+function setAutostartEnabled(enable: boolean): boolean {
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: enable,
+      path: process.execPath,
+      args: ['--hidden'],
+    });
+    updateTrayMenu();
+    return isAutostartEnabled();
+  } catch (err) {
+    console.error('[Main] Failed to set login item settings:', err);
+    return false;
+  }
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  const autostartActive = isAutostartEnabled();
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Open Saira', click: toggleWindow },
+    {
+      label: 'Autostart on Login',
+      type: 'checkbox',
+      checked: autostartActive,
+      click: (item) => {
+        setAutostartEnabled(item.checked);
+      },
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit Saira',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ]);
+  tray.setContextMenu(contextMenu);
 }
 
 function createWindow() {
@@ -50,7 +100,7 @@ function createWindow() {
   positionTopRight();
   window.loadFile(path.join(__dirname, '../../index.html'));
 
-  window.webContents.on('console-message', (event, level, message, line, sourceId) => {
+  window.webContents.on('console-message', (_event, _level, message) => {
     console.log(`[Renderer Console]: ${message}`);
   });
 
@@ -85,33 +135,55 @@ app.on('before-quit', () => {
 });
 
 app.whenReady().then(async () => {
+  // 1. Configure System Tray
   tray = new Tray(getAppIcon());
-  const contextMenu = Menu.buildFromTemplate([
-    { label: 'Open Saira', click: toggleWindow },
-    {
-      label: 'Quit Saira',
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      },
-    },
-  ]);
   tray.setToolTip('Saira');
-  tray.setContextMenu(contextMenu);
   tray.on('click', toggleWindow);
+  updateTrayMenu();
 
+  // 2. Default register autostart if not configured
+  if (!isAutostartEnabled()) {
+    setAutostartEnabled(true);
+  }
+
+  // 3. Create Main UI Window
   createWindow();
+
+  // If launching normally (without --hidden), show UI window
+  const startHidden = process.argv.includes('--hidden');
+  if (!startHidden) {
+    toggleWindow();
+  } else {
+    console.log('[Main] Saira launched silently into System Tray (--hidden).');
+  }
 
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
     toggleWindow();
   });
 
+  // 4. Initialize Orchestrator & Background Scheduler
   const orchestrator = await createOrchestrator();
+  orchestratorTts = orchestrator.tts;
   startReminderPolling(orchestrator.tts);
+
+  // 5. Power Monitor Handlers (Sleep/Wake & Screen Unlock)
+  powerMonitor.on('resume', () => {
+    console.log('[Main PowerMonitor] System resumed from sleep. Scanning for overdue reminders...');
+    if (orchestratorTts) {
+      checkAndFireDueReminders(orchestratorTts);
+    }
+  });
+
+  powerMonitor.on('unlock-screen', () => {
+    console.log('[Main PowerMonitor] Screen unlocked. Scanning for overdue reminders...');
+    if (orchestratorTts) {
+      checkAndFireDueReminders(orchestratorTts);
+    }
+  });
 });
 
 app.on('window-all-closed', () => {
-  // Keep running in system tray on Windows
+  // Keep process running in system tray on Windows
 });
 
 app.on('will-quit', () => {
@@ -187,3 +259,22 @@ ipcMain.on('send-text', (_event, text: string) => {
 ipcMain.on('stop-speech', () => {
   getSocket().emit('stop_speech');
 });
+
+import { getOllamaStatus, pullLocalModel } from '../providers/ollama-manager';
+
+ipcMain.handle('autostart:get', () => {
+  return isAutostartEnabled();
+});
+
+ipcMain.handle('autostart:set', (_event, enable: boolean) => {
+  return setAutostartEnabled(enable);
+});
+
+ipcMain.handle('ollama:status', async () => {
+  return await getOllamaStatus();
+});
+
+ipcMain.handle('ollama:pull', async () => {
+  return await pullLocalModel();
+});
+

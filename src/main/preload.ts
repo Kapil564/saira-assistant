@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld('assistant', {
   sendAudio: (audio: ArrayBuffer) => ipcRenderer.send('send-audio', audio),
   sendText: (text: string) => ipcRenderer.send('send-text', text),
   stopSpeech: () => ipcRenderer.send('stop-speech'),
+  getAutostart: () => ipcRenderer.invoke('autostart:get'),
+  setAutostart: (enable: boolean) => ipcRenderer.invoke('autostart:set', enable),
+  getOllamaStatus: () => ipcRenderer.invoke('ollama:status'),
+  pullOllamaModel: () => ipcRenderer.invoke('ollama:pull'),
   onTranscript: (cb: (data: { text: string }) => void) =>
     ipcRenderer.on('transcript', (_event, data) => cb(data)),
   onResponse: (cb: (response: { spoken?: string; display?: string }) => void) =>

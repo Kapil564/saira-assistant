@@ -3,6 +3,7 @@ import { isLocalServerReachable } from '../shared/http-util';
 import type { IntentResult } from '../shared/types';
 
 export interface LLMProvider {
+  name: string;
   parseIntent(text: string, customSystemPrompt?: string): Promise<IntentResult>;
   generateCompletion(systemPrompt: string, userPrompt: string): Promise<string>;
 }
@@ -56,7 +57,8 @@ function parseContentToIntent(content: unknown): IntentResult {
   }
 }
 
-class OpenAiLLM implements LLMProvider {
+export class OpenAiLLM implements LLMProvider {
+  public name = 'openai';
   private apiKey: string;
   private model: string;
 
@@ -126,7 +128,8 @@ class OpenAiLLM implements LLMProvider {
   }
 }
 
-class GroqLLM implements LLMProvider {
+export class GroqLLM implements LLMProvider {
+  public name = 'groq';
   private apiKey: string;
   private model: string;
 
@@ -196,7 +199,8 @@ class GroqLLM implements LLMProvider {
   }
 }
 
-class GeminiLLM implements LLMProvider {
+export class GeminiLLM implements LLMProvider {
+  public name = 'gemini';
   private apiKey: string;
   private model: string;
 
@@ -260,13 +264,14 @@ class GeminiLLM implements LLMProvider {
   }
 }
 
-class OllamaLLM implements LLMProvider {
+export class OllamaLLM implements LLMProvider {
+  public name = 'ollama';
   private baseUrl: string;
   private model: string;
 
   constructor(baseUrl: string, model: string) {
     this.baseUrl = baseUrl;
-    this.model = model || 'llama3.1';
+    this.model = model || 'llama3.2:3b';
   }
 
   async parseIntent(text: string, customSystemPrompt?: string): Promise<IntentResult> {
@@ -313,7 +318,8 @@ class OllamaLLM implements LLMProvider {
   }
 }
 
-class CloudflareLLM implements LLMProvider {
+export class CloudflareLLM implements LLMProvider {
+  public name = 'cloudflare';
   private accountId: string;
   private apiToken: string;
   private gatewayId: string;
@@ -448,18 +454,10 @@ class CloudflareLLM implements LLMProvider {
   }
 }
 
-async function shouldUseLocal(): Promise<boolean> {
+export function createPrimaryLLMProvider(): LLMProvider | null {
   const hasApiKey = Boolean(config.llm.apiKey);
-  if (!hasApiKey) return true;
-  if (config.llm.provider === 'ollama') {
-    return isLocalServerReachable(`${config.llm.baseUrl}/api/tags`);
-  }
-  return false;
-}
-
-export async function createLLMProvider(): Promise<LLMProvider> {
-  if (await shouldUseLocal()) {
-    return new OllamaLLM(config.llm.baseUrl, config.llm.model);
+  if (!hasApiKey && config.llm.provider !== 'ollama') {
+    return null;
   }
 
   switch (config.llm.provider) {
@@ -474,10 +472,15 @@ export async function createLLMProvider(): Promise<LLMProvider> {
       return new GeminiLLM(config.llm.apiKey, config.llm.model);
     case 'groq':
       return new GroqLLM(config.llm.apiKey, config.llm.model);
-    case 'ollama':
-      return new OllamaLLM(config.llm.baseUrl, config.llm.model);
     case 'openai':
-    default:
       return new OpenAiLLM(config.llm.apiKey, config.llm.model);
+    case 'ollama':
+    default:
+      return new OllamaLLM(config.llm.baseUrl, config.llm.model);
   }
+}
+
+export async function createLLMProvider(): Promise<LLMProvider> {
+  // Return OllamaLLM by default if used directly
+  return new OllamaLLM(config.llm.baseUrl, config.llm.model);
 }

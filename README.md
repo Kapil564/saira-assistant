@@ -110,3 +110,24 @@ Pluggable providers: STT, LLM, TTS
   ↕
 Action executor + SQLite store
 ```
+
+---
+
+## Privacy, Security & Local Data Storage Isolation
+
+Saira is built as a **distributable, privacy-first desktop voice assistant**.
+
+### 1. Per-User Local Storage Isolation
+- **100% Local Storage**: All reminders, to-dos, session transcripts, rolling summaries, and long-term memory files stay **strictly on your local machine**.
+- **Per-User AppData Location**: All database and memory files are dynamically resolved to your OS per-user application data directory (`%APPDATA%\Saira\` on Windows or Electron `userData`). No data is written to shared or relative project paths, guaranteeing total per-install isolation.
+  - **SQLite Database**: `%APPDATA%\Saira\assistant.db`
+  - **Long-Term Memory**: `%APPDATA%\Saira\memory\` (`profile.md`, `preferences.md`, `routines.md`, `projects/`, `people/`)
+  - **Session Gzip Archives**: `%APPDATA%\Saira\archive\sessions\*.jsonl.gz`
+- **Zero Shared Backend**: Saira has no central server, no user accounts, no telemetry content tracking, and no remote database sync.
+- **Data Portability**: All user data is self-contained inside `%APPDATA%\Saira\`. Backing up or migrating your Saira instance is as simple as copying this folder to another machine.
+
+### 2. Explicit LLM Transmission Boundary
+- **Local Storage Boundary**: SQLite tables and Markdown memory files never leave your disk.
+- **Per-Turn Request Boundary**: When you speak or type a prompt, that turn's text and retrieved memory context are sent **per-request** to your configured LLM provider (OpenAI, Gemini, Groq, Cloudflare) for processing that single query only.
+- **100% Offline Capability**: If you configure local models (Ollama for LLM, local faster-whisper for STT, Windows SAPI5 for TTS), **zero data ever leaves your local computer**.
+

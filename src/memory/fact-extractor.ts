@@ -3,6 +3,8 @@ import { saveFactToMemory, parseMemoryFile, getManifest } from './markdown-memor
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { getAppPaths } from '../shared/paths';
+
 export interface ExtractedFact {
   fact: string;
   category: 'profile' | 'preferences' | 'routines' | 'projects' | 'people';
@@ -79,7 +81,7 @@ export async function extractAndStoreFacts(params: {
       return;
     }
 
-    const MEMORY_DIR = path.join(process.cwd(), 'memory');
+    const memoryDir = getAppPaths().memoryDir;
 
     for (const item of facts) {
       if (!item.fact || !item.target_file || (item.confidence && item.confidence < 0.75)) {
@@ -90,7 +92,7 @@ export async function extractAndStoreFacts(params: {
       let relPath = item.target_file.replace(/^memory[\/\\]/, '');
       if (!relPath.endsWith('.md')) relPath += '.md';
 
-      const fullPath = path.join(MEMORY_DIR, relPath);
+      const fullPath = path.join(memoryDir, relPath);
       let existingBullets: string[] = [];
 
       if (fs.existsSync(fullPath)) {
