@@ -10,7 +10,8 @@ A Siri-like voice assistant for Windows built with Electron, TypeScript, SQLite,
 |---|---|---|
 | **Nothing** | leave all API keys blank | Windows SAPI5 TTS, local Ollama LLM, local faster-whisper STT |
 | **OpenAI key** | `OPENAI_API_KEY=*** | Whisper STT + GPT-4o-mini intent + SAPI5 TTS |
-| **ElevenLabs key** | `ELEVENLABS_API_KEY=*** + optional `ELEVENLABS_VOICE_ID` | Premium voice TTS (STT/LLM still auto-fall back) |
+| **Fish Audio key** | `FISH_AUDIO_API_KEY=*** + optional `FISH_AUDIO_REFERENCE_ID` | Premium voice TTS (Fish Audio) |
+| **ElevenLabs key** | `ELEVENLABS_API_KEY=*** + optional `ELEVENLABS_VOICE_ID` | Premium voice TTS (ElevenLabs) |
 | **Gemini key** | `GEMINI_API_KEY=*** | Gemini Flash intent (STT/TTS still auto-fall back) |
 | **Groq key** | `GROQ_API_KEY=*** | Fast Whisper STT + Llama intent + SAPI5 TTS |
 | **Privacy-first** | leave all API keys blank + run local services | faster-whisper + Ollama, fully offline |
@@ -33,7 +34,7 @@ No one has to provide every API. Each category is independent.
 | IPC | Socket.io |
 | Speech-to-text | OpenAI Whisper, Groq, or local faster-whisper |
 | Intent parsing | OpenAI, Google Gemini, Groq, or local Ollama |
-| Text-to-speech | Windows SAPI5, ElevenLabs, or Azure |
+| Text-to-speech | Windows SAPI5, Fish Audio, ElevenLabs, or Azure |
 | Storage | SQLite + Drizzle ORM |
 | Scheduling | node-cron + node-notifier |
 | Packaging | electron-builder |
@@ -85,15 +86,16 @@ The app asks: "For this category, what do I actually have access to?"
 3. If `LLM_PROVIDER=ollama` is explicitly chosen, it verifies Ollama is reachable first
 
 ### Text-to-Speech
-1. If `TTS_PROVIDER=elevenlabs` and `ELEVENLABS_API_KEY` is set → ElevenLabs
-2. If `TTS_PROVIDER=azure` and `AZURE_SPEECH_KEY` is set → Azure
-3. Otherwise → **Windows SAPI5** (free, offline)
+1. If `TTS_PROVIDER=fishaudio` (or `FISH_AUDIO_API_KEY` is set) → Fish Audio (`https://api.fish.audio/v1/tts`)
+2. If `TTS_PROVIDER=elevenlabs` and `ELEVENLABS_API_KEY` is set → ElevenLabs
+3. If `TTS_PROVIDER=azure` and `AZURE_SPEECH_KEY` is set → Azure
+4. Otherwise → **Windows SAPI5** (free, offline)
 
 | Category | Options |
 |---|---|
 | STT | OpenAI Whisper API, Groq Whisper, local faster-whisper |
 | LLM | OpenAI GPT-4o-mini, Gemini Flash, Groq Llama, local Ollama |
-| TTS | Windows SAPI5 (free/offline), ElevenLabs (premium), Azure Neural TTS |
+| TTS | Windows SAPI5 (free/offline), Fish Audio, ElevenLabs, Azure Neural TTS |
 
 Fallback to SAPI5 means the app never breaks.
 

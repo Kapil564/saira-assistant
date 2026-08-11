@@ -2,11 +2,17 @@ import { Server } from 'socket.io';
 import { createServer } from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { executeIntent } from '../actions/executor';
-import { createLLMProvider, type LLMProvider } from '../providers/llm';
-import { createSTTProvider, type STTProvider } from '../providers/stt';
+import { createLLMProvider } from '../providers/llm';
+import { createSTTProvider } from '../providers/stt';
 import { createTTSProvider, type TTSProvider } from '../providers/tts';
 import { config } from '../shared/config';
+import { initMemoryStorage } from '../memory/markdown-memory';
+import { assembleContext } from '../memory/context-pipeline';
+import { extractAndStoreFacts } from '../memory/fact-extractor';
+import { checkAndRunRollingSummary, recordMessageActivity } from '../memory/rolling-summary';
+import { getActiveOrCreateSession, addMessage } from '../db/session-store';
 
 export interface Orchestrator {
   io: Server;
@@ -17,18 +23,38 @@ export async function createOrchestrator(): Promise<Orchestrator> {
   const httpServer = createServer();
   const io = new Server(httpServer, { cors: { origin: '*' } });
 
+  // Initialize Markdown memory directory and manifest
+  initMemoryStorage();
+
   const stt = await createSTTProvider();
   const llm = await createLLMProvider();
   const tts = createTTSProvider();
 
   io.on('connection', (socket) => {
     console.log('renderer connected');
+    const sessionId = getActiveOrCreateSession();
+    console.log(`[Session] Active SQLite Session #${sessionId}`);
+
+    let activeRequestId = 0;
+
+    const cancelActivePipeline = () => {
+      activeRequestId++;
+      tts.stop();
+    };
+
+    socket.on('stop_speech', () => {
+      console.log('[Orchestrator] Stop speech signal received from renderer.');
+      cancelActivePipeline();
+    });
 
     socket.on('audio', async (audioBuffer: Buffer) => {
+      cancelActivePipeline();
+      const currentReqId = activeRequestId;
+
       try {
-        const debugPath = path.join(process.cwd(), 'recorded_debug.wav');
+        const debugPath = path.join(os.tmpdir(), 'saira_debug.wav');
         fs.writeFileSync(debugPath, audioBuffer);
-        console.log(`[Audio Debug] Received ${audioBuffer.length} bytes. Saved to recorded_debug.wav`);
+        console.log(`[Audio Debug] Received ${audioBuffer.length} bytes. Saved to temp dir: ${debugPath}`);
 
         if (audioBuffer.length < 100) {
           console.warn('[Audio Debug Warning] Audio buffer is nearly empty! Check microphone permissions.');
@@ -36,23 +62,70 @@ export async function createOrchestrator(): Promise<Orchestrator> {
 
         console.log(`[STT] Sending audio to provider "${config.stt.provider}"...`);
         const transcription = await stt.transcribe(audioBuffer);
+        if (currentReqId !== activeRequestId) return;
+
         console.log(`[STT Output]: "${transcription.text}"`);
         socket.emit('transcript', { text: transcription.text });
 
-        console.log('[LLM] Parsing intent...');
-        const intent = await llm.parseIntent(transcription.text);
+        const userText = transcription.text.trim();
+        if (!userText) return;
+
+        // 1. Add user message to SQLite DB
+        addMessage({ sessionId, role: 'user', content: userText });
+        recordMessageActivity(sessionId);
+
+        // 2. Assemble context per turn (profile.md + keyword matching memory + summary + recent history)
+        const turnContext = assembleContext({ userMessage: userText, sessionId });
+
+        console.log('[LLM] Parsing intent with assembled context pipeline...');
+        const intent = await llm.parseIntent(userText, turnContext.fullPromptContext);
+        if (currentReqId !== activeRequestId) return;
+
         console.log('[LLM Output]:', JSON.stringify(intent));
         socket.emit('intent', intent);
 
         console.log('[Action] Executing intent...');
         const response = await executeIntent(intent);
+        if (currentReqId !== activeRequestId) return;
+
         console.log('[Action Output]:', JSON.stringify(response));
         socket.emit('response', response);
 
-        console.log('[TTS] Synthesizing speech...');
-        await tts.speak(response.spoken || 'Done.');
-        console.log('[TTS] Finished speaking.');
+        const assistantText = response.spoken || response.display || '';
+
+        if (assistantText.trim()) {
+          // 3. Add assistant response to SQLite DB
+          addMessage({ sessionId, role: 'assistant', content: assistantText });
+          recordMessageActivity(sessionId);
+
+          // 4. Fire async non-blocking fact extraction
+          extractAndStoreFacts({
+            userMessage: userText,
+            assistantResponse: assistantText,
+            llm,
+          }).catch((err) => {
+            console.error('[Fact Extraction Async Error]:', err);
+          });
+
+          // 5. Fire background rolling summary check
+          checkAndRunRollingSummary(sessionId, llm).catch((err) => {
+            console.error('[Rolling Summary Async Error]:', err);
+          });
+        }
+
+        if (response.spoken && response.spoken.trim()) {
+          console.log('[TTS] Synthesizing speech...');
+          await tts.speak(response.spoken);
+          if (currentReqId === activeRequestId) {
+            console.log('[TTS] Finished speaking.');
+          } else {
+            console.log('[TTS] Speech output was preempted by a newer request.');
+          }
+        } else {
+          console.log('[TTS] Intent output is silent. Skipping TTS speech.');
+        }
       } catch (err) {
+        if (currentReqId !== activeRequestId) return;
         const message = err instanceof Error ? err.message : String(err);
         console.error('[Pipeline Error]:', message);
         socket.emit('error', { message });
@@ -61,24 +134,72 @@ export async function createOrchestrator(): Promise<Orchestrator> {
     });
 
     socket.on('text', async (text: string) => {
+      cancelActivePipeline();
+      const currentReqId = activeRequestId;
+
       try {
         console.log(`[Text Input]: "${text}"`);
         socket.emit('transcript', { text });
 
-        console.log('[LLM] Parsing intent...');
-        const intent = await llm.parseIntent(text);
+        const userText = text.trim();
+        if (!userText) return;
+
+        // 1. Add user message to SQLite DB
+        addMessage({ sessionId, role: 'user', content: userText });
+        recordMessageActivity(sessionId);
+
+        // 2. Assemble context per turn
+        const turnContext = assembleContext({ userMessage: userText, sessionId });
+
+        console.log('[LLM] Parsing intent with assembled context pipeline...');
+        const intent = await llm.parseIntent(userText, turnContext.fullPromptContext);
+        if (currentReqId !== activeRequestId) return;
+
         console.log('[LLM Output]:', JSON.stringify(intent));
         socket.emit('intent', intent);
 
         console.log('[Action] Executing intent...');
         const response = await executeIntent(intent);
+        if (currentReqId !== activeRequestId) return;
+
         console.log('[Action Output]:', JSON.stringify(response));
         socket.emit('response', response);
 
-        console.log('[TTS] Synthesizing speech...');
-        await tts.speak(response.spoken || 'Done.');
-        console.log('[TTS] Finished speaking.');
+        const assistantText = response.spoken || response.display || '';
+
+        if (assistantText.trim()) {
+          // 3. Add assistant response to SQLite DB
+          addMessage({ sessionId, role: 'assistant', content: assistantText });
+          recordMessageActivity(sessionId);
+
+          // 4. Fire async non-blocking fact extraction
+          extractAndStoreFacts({
+            userMessage: userText,
+            assistantResponse: assistantText,
+            llm,
+          }).catch((err) => {
+            console.error('[Fact Extraction Async Error]:', err);
+          });
+
+          // 5. Fire background rolling summary check
+          checkAndRunRollingSummary(sessionId, llm).catch((err) => {
+            console.error('[Rolling Summary Async Error]:', err);
+          });
+        }
+
+        if (response.spoken && response.spoken.trim()) {
+          console.log('[TTS] Synthesizing speech...');
+          await tts.speak(response.spoken);
+          if (currentReqId === activeRequestId) {
+            console.log('[TTS] Finished speaking.');
+          } else {
+            console.log('[TTS] Speech output was preempted by a newer request.');
+          }
+        } else {
+          console.log('[TTS] Intent output is silent. Skipping TTS speech.');
+        }
       } catch (err) {
+        if (currentReqId !== activeRequestId) return;
         const message = err instanceof Error ? err.message : String(err);
         console.error('[Pipeline Error]:', message);
         socket.emit('error', { message });
@@ -86,8 +207,12 @@ export async function createOrchestrator(): Promise<Orchestrator> {
       }
     });
 
-    socket.on('disconnect', () => {
-      console.log('renderer disconnected');
+    socket.on('disconnect', async () => {
+      cancelActivePipeline();
+      console.log(`renderer disconnected from Session #${sessionId}. Triggering final session check...`);
+      checkAndRunRollingSummary(sessionId, llm, true).catch((err) => {
+        console.error('[Rolling Summary Disconnect Error]:', err);
+      });
     });
   });
 

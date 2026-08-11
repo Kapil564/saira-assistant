@@ -18,4 +18,4 @@ export interface AssistantResponse {
   intent?: string;
 }
 
-export type TTSProvider = 'sapi5' | 'elevenlabs' | 'azure';
+export type TTSProvider = 'fishaudio' | 'elevenlabs' | 'sapi5' | 'azure' | 'cloudflare';

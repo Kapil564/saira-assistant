@@ -3,11 +3,12 @@ import { z } from 'zod';
 
 const providerSchema = z.enum(['openai', 'gemini', 'groq', 'ollama', 'cloudflare']);
 const sttSchema = z.enum(['openai', 'groq', 'cloudflare']);
-const ttsSchema = z.enum(['sapi5', 'elevenlabs', 'azure', 'cloudflare']);
+const ttsSchema = z.enum(['sapi5', 'fishaudio', 'elevenlabs', 'azure', 'cloudflare']);
 
 const openAiKey = process.env.OPENAI_API_KEY || '';
 const groqKey = process.env.GROQ_API_KEY || '';
 const geminiKey = process.env.GEMINI_API_KEY || '';
+const fishAudioKey = process.env.FISH_AUDIO_API_KEY || process.env.FISH_AUDIO_KEY || '';
 const elevenLabsKey = process.env.ELEVENLABS_API_KEY || '';
 const azureKey = process.env.AZURE_SPEECH_KEY || '';
 
@@ -17,7 +18,7 @@ const cloudflareGatewayId = process.env.CLOUDFLARE_GATEWAY_ID || '';
 
 const defaultStt = (cloudflareAccountId && cloudflareApiToken) ? 'cloudflare' : (groqKey ? 'groq' : 'openai');
 const defaultLlm = (cloudflareAccountId && cloudflareApiToken) ? 'cloudflare' : (geminiKey ? 'gemini' : (groqKey ? 'groq' : 'openai'));
-const defaultTts = elevenLabsKey ? 'elevenlabs' : ((cloudflareAccountId && cloudflareApiToken) ? 'cloudflare' : (azureKey ? 'azure' : 'sapi5'));
+const defaultTts = fishAudioKey ? 'fishaudio' : (elevenLabsKey ? 'elevenlabs' : ((cloudflareAccountId && cloudflareApiToken) ? 'cloudflare' : (azureKey ? 'azure' : 'sapi5')));
 
 export const config = {
   cloudflare: {
@@ -41,7 +42,12 @@ export const config = {
   },
   tts: {
     provider: ttsSchema.default(defaultTts).parse(process.env.TTS_PROVIDER),
-    apiKey: elevenLabsKey || azureKey || cloudflareApiToken,
+    apiKey: fishAudioKey || elevenLabsKey || azureKey || cloudflareApiToken,
+    fishAudioKey,
+    elevenLabsKey,
+    azureKey,
+    referenceId: process.env.FISH_AUDIO_REFERENCE_ID || process.env.FISH_AUDIO_VOICE_ID || '',
+    model: process.env.FISH_AUDIO_MODEL || 's2.1-pro-free',
     voiceId: process.env.ELEVENLABS_VOICE_ID || 'QTKSa2Iyv0yoxvXY2V8a',
     region: process.env.AZURE_SPEECH_REGION || '',
   },
@@ -49,3 +55,4 @@ export const config = {
     port: Number(process.env.PORT || 16123),
   },
 };
+

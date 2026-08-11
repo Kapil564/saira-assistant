@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { WakeOrb, type OrbPhase } from './components/WakeOrb';
 
 function encodeWav(samples: Float32Array, sampleRate = 16000): ArrayBuffer {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
@@ -36,17 +37,70 @@ function writeString(view: DataView, offset: number, str: string) {
   }
 }
 
+function playWakeChime() {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.3);
+  } catch {
+    // ignore audio context error
+  }
+}
+
+const workletCode = `
+class PCMProcessor extends AudioWorkletProcessor {
+  process(inputs) {
+    const input = inputs[0];
+    if (input && input.length > 0 && input[0].length > 0) {
+      this.port.postMessage(input[0]);
+    }
+    return true;
+  }
+}
+registerProcessor('pcm-processor', PCMProcessor);
+`;
+let workletBlobUrl: string | null = null;
+function getWorkletUrl() {
+  if (!workletBlobUrl) {
+    const blob = new Blob([workletCode], { type: 'application/javascript' });
+    workletBlobUrl = URL.createObjectURL(blob);
+  }
+  return workletBlobUrl;
+}
+
 function App() {
   const [messages, setMessages] = useState<{ from: 'user' | 'saira'; text: string }[]>([]);
   const [listening, setListening] = useState(false);
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(true);
   const [status, setStatus] = useState<string>('');
   const [inputText, setInputText] = useState('');
+  const [viewMode] = useState<'orb'>('orb');
+  const [orbPhase, setOrbPhase] = useState<OrbPhase>('idle');
 
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const pcmChunksRef = useRef<Float32Array[]>([]);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const isRecordingRef = useRef(false);
+  const vadStreamRef = useRef<MediaStream | null>(null);
+  const vadAudioCtxRef = useRef<AudioContext | null>(null);
+  const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const hasSpokenRef = useRef(false);
+  const lastSpeechTimeRef = useRef<number>(0);
+  const silenceCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -60,7 +114,66 @@ function App() {
     setMessages((prev) => [...prev, { from, text }]);
   };
 
+  const stopVadListener = () => {
+    if (vadAudioCtxRef.current) {
+      try { vadAudioCtxRef.current.close(); } catch {}
+      vadAudioCtxRef.current = null;
+    }
+    if (vadStreamRef.current) {
+      try { vadStreamRef.current.getTracks().forEach(t => t.stop()); } catch {}
+      vadStreamRef.current = null;
+    }
+  };
+
+  const processChunk = (chunk: Float32Array) => {
+    pcmChunksRef.current.push(chunk);
+
+    let sum = 0;
+    for (let i = 0; i < chunk.length; i++) {
+      sum += chunk[i] * chunk[i];
+    }
+    const rms = Math.sqrt(sum / (chunk.length || 1));
+
+    // Threshold for detecting active vocal energy
+    if (rms > 0.015) {
+      hasSpokenRef.current = true;
+      lastSpeechTimeRef.current = Date.now();
+    }
+  };
+
   const startRecording = async () => {
+    if (isRecordingRef.current) return;
+    isRecordingRef.current = true;
+    stopVadListener();
+
+    hasSpokenRef.current = false;
+    lastSpeechTimeRef.current = Date.now();
+
+    if (silenceCheckIntervalRef.current) {
+      clearInterval(silenceCheckIntervalRef.current);
+    }
+
+    // 4-second silence detection timer after speech starts
+    silenceCheckIntervalRef.current = setInterval(() => {
+      if (!isRecordingRef.current) return;
+      if (hasSpokenRef.current) {
+        const elapsedSilence = Date.now() - lastSpeechTimeRef.current;
+        if (elapsedSilence >= 4000) {
+          console.log('[Silence VAD] 4 seconds of silence detected after user speech. Auto-submitting audio to LLM...');
+          stopRecording();
+        }
+      }
+    }, 200);
+
+    const assistant = (window as any).assistant;
+    if (assistant?.stopSpeech) assistant.stopSpeech();
+    if (assistant?.showWindow) assistant.showWindow();
+
+    playWakeChime();
+    setOrbPhase('listening');
+    setListening(true);
+    setStatus('🎙 Listening...');
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
@@ -70,28 +183,59 @@ function App() {
       pcmChunksRef.current = [];
 
       const source = audioCtx.createMediaStreamSource(stream);
-      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
 
-      processor.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0);
-        pcmChunksRef.current.push(new Float32Array(inputData));
-      };
-
-      source.connect(processor);
-      processor.connect(audioCtx.destination);
-
-      setListening(true);
-      setStatus('🎙 Listening... Speak now');
+      if (audioCtx.audioWorklet) {
+        try {
+          await audioCtx.audioWorklet.addModule(getWorkletUrl());
+          const workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor');
+          workletNodeRef.current = workletNode;
+          workletNode.port.onmessage = (e) => {
+            processChunk(new Float32Array(e.data));
+          };
+          source.connect(workletNode);
+          workletNode.connect(audioCtx.destination);
+        } catch {
+          const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+          processorRef.current = processor;
+          processor.onaudioprocess = (e) => {
+            processChunk(new Float32Array(e.inputBuffer.getChannelData(0)));
+          };
+          source.connect(processor);
+          processor.connect(audioCtx.destination);
+        }
+      } else {
+        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+        processorRef.current = processor;
+        processor.onaudioprocess = (e) => {
+          processChunk(new Float32Array(e.inputBuffer.getChannelData(0)));
+        };
+        source.connect(processor);
+        processor.connect(audioCtx.destination);
+      }
     } catch (err) {
       addMessage('saira', 'Microphone access is required.');
       setStatus('');
+      setOrbPhase('idle');
+      isRecordingRef.current = false;
     }
   };
 
   const stopRecording = () => {
+    if (!isRecordingRef.current) return;
+    isRecordingRef.current = false;
+
+    if (silenceCheckIntervalRef.current) {
+      clearInterval(silenceCheckIntervalRef.current);
+      silenceCheckIntervalRef.current = null;
+    }
+    hasSpokenRef.current = false;
+
+    if (workletNodeRef.current) {
+      try { workletNodeRef.current.disconnect(); } catch {}
+      workletNodeRef.current = null;
+    }
     if (processorRef.current) {
-      processorRef.current.disconnect();
+      try { processorRef.current.disconnect(); } catch {}
       processorRef.current = null;
     }
     if (mediaStreamRef.current) {
@@ -108,6 +252,7 @@ function App() {
     if (totalSamples === 0) {
       setListening(false);
       setStatus('');
+      setOrbPhase('idle');
       return;
     }
 
@@ -119,13 +264,14 @@ function App() {
     }
 
     const wavBuffer = encodeWav(pcm, 16000);
-    setStatus('⚡ Transcribing audio...');
+    setStatus('⚡ Transcribing...');
     const assistant = (window as any).assistant;
     if (assistant?.sendAudio) {
       assistant.sendAudio(wavBuffer);
     } else {
       addMessage('saira', 'Error: Assistant bridge is not connected.');
       setStatus('');
+      setOrbPhase('idle');
     }
     setListening(false);
   };
@@ -135,6 +281,130 @@ function App() {
     else startRecording();
   };
 
+  // Continuous Offline Voice Activity & Wake-Word Detector
+  useEffect(() => {
+    if (!wakeWordEnabled) {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+        recognitionRef.current = null;
+      }
+      stopVadListener();
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    let useWebSpeech = Boolean(SpeechRecognition);
+
+    if (useWebSpeech) {
+      try {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onresult = (event: any) => {
+          if (isRecordingRef.current) return;
+
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0]?.transcript?.toLowerCase() || '';
+            if (
+              transcript.includes('saira') ||
+              transcript.includes('hey saira') ||
+              transcript.includes('hi saira') ||
+              transcript.includes('ok saira') ||
+              transcript.includes('wake up saira')
+            ) {
+              console.log('[Wake Word Detected]:', transcript);
+              startRecording();
+              break;
+            }
+          }
+        };
+
+        recognition.onerror = (e: any) => {
+          if (e.error === 'network' || e.error === 'no-speech' || e.error === 'aborted') {
+            if (e.error === 'network') {
+              startLocalAudioVad();
+            }
+            return;
+          }
+          console.warn('[Wake Word Warning]:', e.error);
+        };
+
+        recognition.onend = () => {
+          if (wakeWordEnabled && !isRecordingRef.current) {
+            setTimeout(() => {
+              try { recognition.start(); } catch {}
+            }, 1000);
+          }
+        };
+
+        recognition.start();
+        recognitionRef.current = recognition;
+        console.log('[Wake Word] Listening for "Hey Saira"...');
+      } catch (err) {
+        startLocalAudioVad();
+      }
+    } else {
+      startLocalAudioVad();
+    }
+
+    function startLocalAudioVad() {
+      if (vadAudioCtxRef.current || isRecordingRef.current) return;
+
+      navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+        vadStreamRef.current = stream;
+        const ctx = new AudioContext();
+        vadAudioCtxRef.current = ctx;
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        let activeEnergyCount = 0;
+
+        const checkVolume = () => {
+          if (!wakeWordEnabled || isRecordingRef.current || !vadAudioCtxRef.current) return;
+          analyser.getByteFrequencyData(dataArray);
+
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const averageVolume = sum / dataArray.length;
+
+          if (averageVolume > 45) {
+            activeEnergyCount++;
+            if (activeEnergyCount >= 5) {
+              console.log('[Offline VAD] Clear voice activity detected. Auto-triggering recording...');
+              startRecording();
+              activeEnergyCount = 0;
+              return;
+            }
+          } else {
+            activeEnergyCount = Math.max(0, activeEnergyCount - 1);
+          }
+
+          requestAnimationFrame(checkVolume);
+        };
+
+        checkVolume();
+        console.log('[Offline VAD] Listening for local voice activity...');
+      }).catch((err) => {
+        console.warn('[Offline VAD Error]: Microphone access failed:', err);
+      });
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+        recognitionRef.current = null;
+      }
+      stopVadListener();
+    };
+  }, [wakeWordEnabled]);
+
   const handleSendText = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!inputText.trim()) return;
@@ -142,12 +412,15 @@ function App() {
     const text = inputText.trim();
     setInputText('');
     setStatus('🧠 Processing request...');
+
     const assistant = (window as any).assistant;
+    if (assistant?.stopSpeech) assistant.stopSpeech();
     if (assistant?.sendText) {
       assistant.sendText(text);
     } else {
       addMessage('saira', 'Error: Assistant bridge is not connected.');
       setStatus('');
+      setOrbPhase('idle');
     }
   };
 
@@ -155,90 +428,74 @@ function App() {
     const assistant = (window as any).assistant;
     if (!assistant) return;
 
+    const handleReactivate = () => {
+      console.log('[Renderer] Window reactivated. Resuming audio contexts...');
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      }
+      if (vadAudioCtxRef.current && vadAudioCtxRef.current.state === 'suspended') {
+        vadAudioCtxRef.current.resume().catch(() => {});
+      }
+    };
+
+    assistant.onWindowShown?.(handleReactivate);
+    window.addEventListener('focus', handleReactivate);
+    document.addEventListener('visibilitychange', handleReactivate);
+
     assistant.onTranscript?.((data: { text: string }) => {
       if (data.text) {
         addMessage('user', data.text);
-        setStatus('🧠 Processing intent...');
+        setStatus('🧠 Thinking...');
       } else {
         setStatus('');
+        setOrbPhase('idle');
       }
     });
 
     assistant.onResponse?.((response: { spoken?: string; display?: string }) => {
       addMessage('saira', response.display || response.spoken || 'Done.');
       setStatus('');
+      if (response.spoken && response.spoken.trim()) {
+        setOrbPhase('speaking');
+        setTimeout(() => {
+          setOrbPhase('idle');
+        }, 3500);
+      } else {
+        setOrbPhase('idle');
+      }
     });
 
     assistant.onError?.((error: { message: string }) => {
       addMessage('saira', `Error: ${error.message}`);
       setStatus('');
+      setOrbPhase('idle');
     });
+
+    return () => {
+      window.removeEventListener('focus', handleReactivate);
+      document.removeEventListener('visibilitychange', handleReactivate);
+    };
+  }, [viewMode]);
+
+  useEffect(() => {
+    const assistant = (window as any).assistant;
+    if (assistant?.resizeToOrb) {
+      assistant.resizeToOrb();
+    }
   }, []);
 
   return (
-    <div className="h-full flex flex-col bg-slate-900 text-white p-4">
-      {/* Header */}
-      <div className="pb-3 border-b border-slate-800 flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <div className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="font-semibold text-sm">Saira Assistant</span>
-        </div>
-        {status && <span className="text-xs text-slate-400 italic">{status}</span>}
-      </div>
-
-      {/* Messages List */}
-      <div className="flex-1 overflow-y-auto space-y-3 py-4">
-        {messages.length === 0 && (
-          <div className="text-center text-slate-500 text-xs mt-12">
-            Click the microphone or type below to start chatting.
-          </div>
-        )}
-        {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
-              m.from === 'user' ? 'ml-auto bg-blue-600 text-white' : 'bg-slate-800 text-slate-100 border border-slate-700'
-            }`}
-          >
-            {m.text}
-          </div>
-        ))}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input Controls */}
-      <div className="pt-3 border-t border-slate-800 flex flex-col space-y-3">
-        <form onSubmit={handleSendText} className="flex items-center space-x-2">
-          <input
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            placeholder="Type a message or command..."
-            className="flex-1 bg-slate-800 text-sm border border-slate-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-blue-500 transition-colors placeholder:text-slate-500"
-          />
-          <button
-            type="submit"
-            disabled={!inputText.trim()}
-            className="bg-blue-600 disabled:opacity-40 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-medium text-sm transition-colors"
-          >
-            ➤
-          </button>
-        </form>
-
-        <div className="flex items-center justify-center pt-1">
-          <button
-            onClick={toggleRecording}
-            className={`w-14 h-14 rounded-full flex items-center justify-center text-xl shadow-lg transition-all ${
-              listening
-                ? 'bg-red-500 animate-pulse scale-105 shadow-red-500/50'
-                : 'bg-blue-600 hover:bg-blue-500 hover:scale-105 shadow-blue-500/30'
-            }`}
-          >
-            {listening ? '◼' : '🎙'}
-          </button>
-        </div>
-      </div>
-    </div>
+    <WakeOrb
+      phase={orbPhase}
+      size={130}
+      onClick={() => {
+        if (listening) {
+          stopRecording();
+        } else {
+          startRecording();
+        }
+      }}
+    />
   );
 }
 

@@ -131,3 +131,42 @@ This document logs technical challenges, root causes, and resolutions encountere
   2. **AbortController Request Signals**: Created and passed an `AbortSignal` for each active request so that pending STT and LLM HTTP requests are immediately aborted when a new user input arrives.
   3. **TTS Preemption & Audio Halting**: Added a `stop()` method to `TTSProvider` ([src/providers/tts.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/providers/tts.ts)) to terminate ongoing PowerShell audio synthesis and playback processes instantly upon interruption.
 
+---
+
+## 15. Elimination of Parallel TTS Processing & Instant User Barge-In Interruption
+
+- **Symptom**: TTS audio outputs ran in parallel or stacked up when speech inputs occurred in quick succession, and TTS audio kept playing while the user was actively speaking.
+- **Root Cause**:
+  - Renderer did not send an IPC signal to stop TTS at the onset of user speech detection (microphone click, wake word recognition, or VAD volume threshold).
+  - TTS provider queue did not enforce strict single-threaded preemption upon speech start.
+- **Resolution**:
+  1. **Exposed IPC Interruption Bridge**: Exposed `stopSpeech()` in [src/main/preload.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/main/preload.ts) and added `stop-speech` handler in [src/main/index.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/main/index.ts) to forward `stop_speech` socket events instantly.
+  2. **Immediate Renderer Barge-In**: Updated `startRecording`, `handleSendText`, WebSpeech wake word, and offline VAD volume detection in [src/renderer/index.tsx](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/renderer/index.tsx) to invoke `assistant.stopSpeech()` immediately when user input or voice energy is detected.
+  3. **Strict Sequential TTS Execution**: Refactored `QueuedTTS` in [src/providers/tts.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/providers/tts.ts) and pipeline handlers in [src/orchestrator/index.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/orchestrator/index.ts) to guarantee zero parallel processing and instant audio playback termination upon interruption.
+
+---
+
+## 16. CommonJS / ESM Module Mismatch Error (`ERR_REQUIRE_ESM` on `fish-audio`)
+
+- **Symptom**: Electron main process initialization threw `Error [ERR_REQUIRE_ESM]: require() of ES Module .../fish-audio/dist/cjs/index.js from .../dist/main/index.js not supported`.
+- **Root Cause**: `fish-audio` package is an ES Module package. Top-level static `import` statements in CommonJS-targeted builds resulted in synchronous `require("fish-audio")` calls on startup, which Node 20 blocks for ESM packages.
+- **Resolution**: Converted top-level static import of `FishAudioClient` in [src/providers/tts.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/providers/tts.ts) to dynamic asynchronous `await import('fish-audio')` inside `FishAudioTTS.speak()`. Main process bundling and app startup now complete without ESM module loader conflicts.
+
+---
+
+## 17. Project Workspace Temporary Audio Clutter
+
+- **Symptom**: `recorded_debug.wav` and `temp_tts_*.mp3` files were being saved into the project workspace root folder.
+- **Root Cause**: Hardcoded `process.cwd()` paths in [src/orchestrator/index.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/orchestrator/index.ts) and [src/providers/tts.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/providers/tts.ts).
+- **Resolution**: Redirected all temporary recording buffers and MP3 playback files to system temp (`os.tmpdir()`), ensuring zero file clutter in the project root directory.
+
+---
+
+## 18. PowerShell Variable Expansion Error (`The system cannot open the device or file specified`)
+
+- **Symptom**: PowerShell spawned via `-Command` printed `The system cannot open the device or file specified` or failed variable resolution when evaluating `$synth`, `$text`, or `$player`.
+- **Root Cause**: Passing multi-line PowerShell scripts directly to `powershell.exe -Command` caused PowerShell to interpret variable identifiers starting with `$` as uninitialized environment variables (`$null`).
+- **Resolution**: Created `spawnPowerShellScript()` helper in [src/providers/tts.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/providers/tts.ts#L29-L35) to encode all PowerShell scripts into UTF-16LE Base64 strings passed via `-NoProfile -NonInteractive -EncodedCommand`. Scripts now execute cleanly with zero syntax or variable expansion errors.
+
+
+

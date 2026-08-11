@@ -3,31 +3,42 @@ import { isLocalServerReachable } from '../shared/http-util';
 import type { IntentResult } from '../shared/types';
 
 export interface LLMProvider {
-  parseIntent(text: string): Promise<IntentResult>;
+  parseIntent(text: string, customSystemPrompt?: string): Promise<IntentResult>;
+  generateCompletion(systemPrompt: string, userPrompt: string): Promise<string>;
 }
 
-const SYSTEM_PROMPT = `You are the intent parser for a Windows voice assistant named Saira.
-Your job is to understand what the user wants and return a JSON object matching one of the allowed intents.
+export function getSystemPrompt(customContext?: string): string {
+  const globalContext = customContext || 'Saira is an intelligent voice-first Windows desktop assistant.';
+  return `You are the core intelligence and intent parser for a Windows voice assistant named Saira.
+Your job is to understand user requests, follow global behavioral guidelines and long-term memories, and return a JSON object matching one of the allowed intents.
+
+Global Assistant Behavior, Persona & Memory Context:
+---
+${globalContext}
+---
 
 Allowed intents and required params:
-- chat.respond: { message: string } (use this for any general conversation or question)
+- chat.respond: { message: string } (use this for any general conversation, question, or general query)
 - reminder.create: { text: string, due: ISO-8601 datetime string }
 - reminder.list: {}
 - reminder.complete: { id?: number, text?: string }
 - todo.create: { text: string }
 - todo.list: {}
 - todo.complete: { id?: number, text?: string }
-- unknown: {} (use only if the request is truly nonsense)
+- unknown: {} (use only if the request is truly unprocessable nonsense)
 
 Current date and time: ${new Date().toISOString()}
 
 Important rules:
-- If the user asks for something outside these capabilities, do NOT invent an intent. Use "chat.respond" and politely say you cannot do that yet.
+- Adhere strictly to the global persona and behavioral rules above in all sessions.
+- In chat.respond, keep messages concise, direct, helpful, and natural for text-to-speech reading.
+- If the user asks for something outside these capabilities, do NOT invent an intent. Use "chat.respond" and concisely explain what capabilities are available.
 - Always respond in valid JSON only. No explanations before or after the JSON.
 - For relative times like "tomorrow at 5pm", output a full ISO-8601 datetime.
 
 Example output for "remind me to call mom tomorrow at 10am":
 {"intent":"reminder.create","params":{"text":"call mom","due":"2026-07-31T10:00:00"}}`;
+}
 
 function parseContentToIntent(content: unknown): IntentResult {
   if (typeof content === 'object' && content !== null) {
@@ -54,8 +65,10 @@ class OpenAiLLM implements LLMProvider {
     this.model = model;
   }
 
-  async parseIntent(text: string): Promise<IntentResult> {
+  async parseIntent(text: string, customSystemPrompt?: string): Promise<IntentResult> {
     if (!this.apiKey) throw new Error('OpenAI API key is missing.');
+
+    const sysPrompt = getSystemPrompt(customSystemPrompt);
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -66,7 +79,7 @@ class OpenAiLLM implements LLMProvider {
       body: JSON.stringify({
         model: this.model,
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: sysPrompt },
           { role: 'user', content: text },
         ],
         response_format: { type: 'json_object' },
@@ -83,6 +96,34 @@ class OpenAiLLM implements LLMProvider {
     const content = data.choices?.[0]?.message?.content;
     return parseContentToIntent(content);
   }
+
+  async generateCompletion(systemPrompt: string, userPrompt: string): Promise<string> {
+    if (!this.apiKey) throw new Error('OpenAI API key is missing.');
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.3,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenAI completion failed (${response.status}): ${errText || response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
 }
 
 class GroqLLM implements LLMProvider {
@@ -94,8 +135,10 @@ class GroqLLM implements LLMProvider {
     this.model = model || 'llama3-8b-8192';
   }
 
-  async parseIntent(text: string): Promise<IntentResult> {
+  async parseIntent(text: string, customSystemPrompt?: string): Promise<IntentResult> {
     if (!this.apiKey) throw new Error('Groq API key is missing.');
+
+    const sysPrompt = getSystemPrompt(customSystemPrompt);
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -106,7 +149,7 @@ class GroqLLM implements LLMProvider {
       body: JSON.stringify({
         model: this.model,
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: sysPrompt },
           { role: 'user', content: text },
         ],
         response_format: { type: 'json_object' },
@@ -123,6 +166,34 @@ class GroqLLM implements LLMProvider {
     const content = data.choices?.[0]?.message?.content;
     return parseContentToIntent(content);
   }
+
+  async generateCompletion(systemPrompt: string, userPrompt: string): Promise<string> {
+    if (!this.apiKey) throw new Error('Groq API key is missing.');
+
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.3,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Groq completion failed (${response.status}): ${errText || response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
 }
 
 class GeminiLLM implements LLMProvider {
@@ -134,9 +205,10 @@ class GeminiLLM implements LLMProvider {
     this.model = model || 'gemini-1.5-flash';
   }
 
-  async parseIntent(text: string): Promise<IntentResult> {
+  async parseIntent(text: string, customSystemPrompt?: string): Promise<IntentResult> {
     if (!this.apiKey) throw new Error('Gemini API key is missing.');
 
+    const sysPrompt = getSystemPrompt(customSystemPrompt);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
 
     const response = await fetch(url, {
@@ -144,7 +216,7 @@ class GeminiLLM implements LLMProvider {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [
-          { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
+          { role: 'user', parts: [{ text: sysPrompt }] },
           { role: 'user', parts: [{ text }] },
         ],
         generationConfig: { temperature: 0.2 },
@@ -160,6 +232,32 @@ class GeminiLLM implements LLMProvider {
     const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
     return parseContentToIntent(content);
   }
+
+  async generateCompletion(systemPrompt: string, userPrompt: string): Promise<string> {
+    if (!this.apiKey) throw new Error('Gemini API key is missing.');
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          { role: 'user', parts: [{ text: systemPrompt }] },
+          { role: 'user', parts: [{ text: userPrompt }] },
+        ],
+        generationConfig: { temperature: 0.3 },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Gemini completion failed (${response.status}): ${errText || response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  }
 }
 
 class OllamaLLM implements LLMProvider {
@@ -171,13 +269,14 @@ class OllamaLLM implements LLMProvider {
     this.model = model || 'llama3.1';
   }
 
-  async parseIntent(text: string): Promise<IntentResult> {
+  async parseIntent(text: string, customSystemPrompt?: string): Promise<IntentResult> {
+    const sysPrompt = getSystemPrompt(customSystemPrompt);
     const response = await fetch(`${this.baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: this.model,
-        prompt: `${SYSTEM_PROMPT}\n\nUser: ${text}\n\nIntent JSON:`,
+        prompt: `${sysPrompt}\n\nUser: ${text}\n\nIntent JSON:`,
         stream: false,
         format: 'json',
       }),
@@ -191,6 +290,26 @@ class OllamaLLM implements LLMProvider {
     const data = await response.json();
     const content = data.response;
     return parseContentToIntent(content);
+  }
+
+  async generateCompletion(systemPrompt: string, userPrompt: string): Promise<string> {
+    const response = await fetch(`${this.baseUrl}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: this.model,
+        prompt: `${systemPrompt}\n\n${userPrompt}`,
+        stream: false,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Ollama completion failed (${response.status}): ${errText || response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.response || '';
   }
 }
 
@@ -207,8 +326,10 @@ class CloudflareLLM implements LLMProvider {
     this.model = model;
   }
 
-  async parseIntent(text: string): Promise<IntentResult> {
+  async parseIntent(text: string, customSystemPrompt?: string): Promise<IntentResult> {
     if (!this.apiToken) throw new Error('Cloudflare API Token is missing.');
+
+    const sysPrompt = getSystemPrompt(customSystemPrompt);
 
     if (this.gatewayId && this.accountId) {
       const response = await fetch(
@@ -222,7 +343,7 @@ class CloudflareLLM implements LLMProvider {
           body: JSON.stringify({
             model: this.model || 'gpt-4o-mini',
             messages: [
-              { role: 'system', content: SYSTEM_PROMPT },
+              { role: 'system', content: sysPrompt },
               { role: 'user', content: text },
             ],
             response_format: { type: 'json_object' },
@@ -252,7 +373,7 @@ class CloudflareLLM implements LLMProvider {
       },
       body: JSON.stringify({
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: sysPrompt },
           { role: 'user', content: text },
         ],
       }),
@@ -266,6 +387,64 @@ class CloudflareLLM implements LLMProvider {
     const data = await response.json();
     const content = data.result?.response ?? data.result ?? data.response;
     return parseContentToIntent(content);
+  }
+
+  async generateCompletion(systemPrompt: string, userPrompt: string): Promise<string> {
+    if (!this.apiToken) throw new Error('Cloudflare API Token is missing.');
+
+    if (this.gatewayId && this.accountId) {
+      const response = await fetch(
+        `https://gateway.ai.cloudflare.com/v1/${this.accountId}/${this.gatewayId}/openai/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.apiToken}`,
+          },
+          body: JSON.stringify({
+            model: this.model || 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+            temperature: 0.3,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Cloudflare AI Gateway completion failed (${response.status}): ${errText || response.statusText}`);
+      }
+
+      const data = await response.json();
+      return data.choices?.[0]?.message?.content || '';
+    }
+
+    if (!this.accountId) throw new Error('Cloudflare Account ID is missing.');
+
+    const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/ai/run/${this.model}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiToken}`,
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: systemPrompt ? userPrompt : '' },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Cloudflare Workers AI completion failed (${response.status}): ${errText || response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.result?.response ?? data.result ?? data.response ?? '';
   }
 }
 
