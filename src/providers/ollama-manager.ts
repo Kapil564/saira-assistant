@@ -1,4 +1,7 @@
 import * as os from 'node:os';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { spawn } from 'node:child_process';
 import { isLocalServerReachable } from '../shared/http-util';
 import { config } from '../shared/config';
 
@@ -19,6 +22,51 @@ const DEFAULT_LOCAL_MODEL = process.env.OLLAMA_FALLBACK_MODEL || 'llama3.2:3b';
 
 let currentDownloadProgress = 0;
 let isDownloading = false;
+
+/**
+ * Attempts to auto-start the local Ollama background service if installed on the Windows machine.
+ */
+export async function tryStartOllamaService(): Promise<boolean> {
+  const baseUrl = config.llm.baseUrl || 'http://localhost:11434';
+  if (await isLocalServerReachable(`${baseUrl}/api/tags`)) {
+    return true;
+  }
+
+  const localAppData = process.env.LOCALAPPDATA || '';
+  const programFiles = process.env.ProgramFiles || '';
+  const possiblePaths = [
+    path.join(localAppData, 'Programs', 'Ollama', 'ollama.exe'),
+    path.join(programFiles, 'Ollama', 'ollama.exe'),
+    'ollama',
+  ];
+
+  for (const execPath of possiblePaths) {
+    if (execPath !== 'ollama' && !fs.existsSync(execPath)) continue;
+
+    try {
+      console.log(`[Ollama Service] Attempting to auto-start Ollama background service via "${execPath}"...`);
+      const child = spawn(execPath, ['serve'], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+
+      // Poll port 11434 for up to 3 seconds to confirm readiness
+      for (let i = 0; i < 6; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (await isLocalServerReachable(`${baseUrl}/api/tags`)) {
+          console.log('[Ollama Service] Successfully started Ollama service on port 11434.');
+          return true;
+        }
+      }
+    } catch {
+      // Continue to next path
+    }
+  }
+
+  return false;
+}
 
 /**
  * Checks system RAM specifications.
@@ -44,7 +92,12 @@ export function checkSystemRam() {
 export async function getOllamaStatus(): Promise<OllamaStatus> {
   const ramInfo = checkSystemRam();
   const baseUrl = config.llm.baseUrl || 'http://localhost:11434';
-  const running = await isLocalServerReachable(`${baseUrl}/api/tags`);
+  let running = await isLocalServerReachable(`${baseUrl}/api/tags`);
+
+  if (!running) {
+    // Attempt auto-starting the Ollama background service if installed
+    running = await tryStartOllamaService();
+  }
 
   if (!running) {
     return {
@@ -54,7 +107,7 @@ export async function getOllamaStatus(): Promise<OllamaStatus> {
       modelDownloaded: false,
       downloading: false,
       downloadProgress: 0,
-      statusText: 'Ollama server is not running locally on port 11434.',
+      statusText: 'Ollama server is not running locally on port 11434. Install Ollama or run "ollama serve".',
       ...ramInfo,
     };
   }
@@ -101,10 +154,14 @@ export async function pullLocalModel(
   onProgress?: (progressPercent: number, statusText: string) => void
 ): Promise<boolean> {
   const baseUrl = config.llm.baseUrl || 'http://localhost:11434';
-  const isRunning = await isLocalServerReachable(`${baseUrl}/api/tags`);
+  let isRunning = await isLocalServerReachable(`${baseUrl}/api/tags`);
 
   if (!isRunning) {
-    console.warn('[Ollama Pull] Cannot pull model: Ollama server is not running.');
+    isRunning = await tryStartOllamaService();
+  }
+
+  if (!isRunning) {
+    console.warn('[Ollama Pull] Cannot pull model: Ollama server is not running on port 11434.');
     return false;
   }
 

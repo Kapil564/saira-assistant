@@ -261,6 +261,9 @@ ipcMain.on('stop-speech', () => {
 });
 
 import { getOllamaStatus, pullLocalModel } from '../providers/ollama-manager';
+import { getFullSetupStatus, runFullSetupSequence } from '../providers/setup-manager';
+import { setSelectedModelName, downloadWhisperModel } from '../providers/whisper-manager';
+import { setSelectedVoiceName, downloadPiperVoice } from '../providers/piper-manager';
 
 ipcMain.handle('autostart:get', () => {
   return isAutostartEnabled();
@@ -277,4 +280,24 @@ ipcMain.handle('ollama:status', async () => {
 ipcMain.handle('ollama:pull', async () => {
   return await pullLocalModel();
 });
+
+ipcMain.handle('setup:status', async () => {
+  return await getFullSetupStatus();
+});
+
+ipcMain.handle('setup:run', async () => {
+  return await runFullSetupSequence();
+});
+
+ipcMain.handle('stt:set-model', async (_event, modelName: string) => {
+  setSelectedModelName(modelName);
+  return await downloadWhisperModel(modelName);
+});
+
+ipcMain.handle('tts:set-voice', async (_event, voiceName: string) => {
+  setSelectedVoiceName(voiceName);
+  return await downloadPiperVoice(voiceName);
+});
+
+
 

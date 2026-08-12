@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld('assistant', {
   setAutostart: (enable: boolean) => ipcRenderer.invoke('autostart:set', enable),
   getOllamaStatus: () => ipcRenderer.invoke('ollama:status'),
   pullOllamaModel: () => ipcRenderer.invoke('ollama:pull'),
+  getSetupStatus: () => ipcRenderer.invoke('setup:status'),
+  runSetupSequence: () => ipcRenderer.invoke('setup:run'),
+  setSttModel: (modelName: string) => ipcRenderer.invoke('stt:set-model', modelName),
+  setTtsVoice: (voiceName: string) => ipcRenderer.invoke('tts:set-voice', voiceName),
   onTranscript: (cb: (data: { text: string }) => void) =>
     ipcRenderer.on('transcript', (_event, data) => cb(data)),
   onResponse: (cb: (response: { spoken?: string; display?: string }) => void) =>

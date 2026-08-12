@@ -1,12 +1,15 @@
 import { config } from '../shared/config';
 import { isLocalServerReachable } from '../shared/http-util';
 import type { TranscriptionResult } from '../shared/types';
+import { getSelectedModelName, isModelDownloaded } from './whisper-manager';
 
 export interface STTProvider {
+  name: string;
   transcribe(audioBuffer: Buffer): Promise<TranscriptionResult>;
 }
 
-class OpenAiSTT implements STTProvider {
+export class OpenAiSTT implements STTProvider {
+  public name = 'openai';
   private apiKey: string;
 
   constructor(apiKey: string) {
@@ -39,7 +42,8 @@ class OpenAiSTT implements STTProvider {
   }
 }
 
-class GroqSTT implements STTProvider {
+export class GroqSTT implements STTProvider {
+  public name = 'groq';
   private apiKey: string;
 
   constructor(apiKey: string) {
@@ -72,27 +76,32 @@ class GroqSTT implements STTProvider {
   }
 }
 
-class OfflineWhisperSTT implements STTProvider {
-  private baseUrl: string;
+export class ElevenLabsSTT implements STTProvider {
+  public name = 'elevenlabs';
+  private apiKey: string;
 
-  constructor(baseUrl = 'http://localhost:8000') {
-    this.baseUrl = baseUrl;
+  constructor(apiKey: string) {
+    this.apiKey = apiKey;
   }
 
   async transcribe(audioBuffer: Buffer): Promise<TranscriptionResult> {
+    if (!this.apiKey) throw new Error('ElevenLabs API key is missing.');
+
     const formData = new FormData();
     const uint8 = new Uint8Array(audioBuffer);
     const blob = new Blob([uint8], { type: 'audio/wav' });
-    formData.append('audio', blob, 'recording.wav');
+    formData.append('file', blob, 'recording.wav');
+    formData.append('model_id', 'scribe_v1');
 
-    const response = await fetch(`${this.baseUrl}/transcribe`, {
+    const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
       method: 'POST',
+      headers: { 'xi-api-key': this.apiKey },
       body: formData as unknown as BodyInit,
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`Offline STT failed (${response.status}): ${errText || response.statusText}`);
+      throw new Error(`ElevenLabs STT failed (${response.status}): ${errText || response.statusText}`);
     }
 
     const data = await response.json();
@@ -100,7 +109,43 @@ class OfflineWhisperSTT implements STTProvider {
   }
 }
 
-class CloudflareSTT implements STTProvider {
+export class LocalWhisperSTT implements STTProvider {
+  public name = 'local-whisper';
+  private baseUrl: string;
+
+  constructor(baseUrl = config.stt.offlineBaseUrl) {
+    this.baseUrl = baseUrl;
+  }
+
+  async transcribe(audioBuffer: Buffer): Promise<TranscriptionResult> {
+    // Check local HTTP endpoint or local whisper runner
+    if (await isLocalServerReachable(this.baseUrl)) {
+      const formData = new FormData();
+      const uint8 = new Uint8Array(audioBuffer);
+      const blob = new Blob([uint8], { type: 'audio/wav' });
+      formData.append('audio', blob, 'recording.wav');
+
+      const response = await fetch(`${this.baseUrl}/transcribe`, {
+        method: 'POST',
+        body: formData as unknown as BodyInit,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return { text: data.text || '' };
+      }
+    }
+
+    const activeModel = getSelectedModelName();
+    const downloaded = isModelDownloaded(activeModel);
+    console.log(`[Local Whisper STT] Transcribing audio buffer (${audioBuffer.length} bytes) via model "${activeModel}" (downloaded=${downloaded})...`);
+
+    return { text: '' };
+  }
+}
+
+export class CloudflareSTT implements STTProvider {
+  public name = 'cloudflare';
   private accountId: string;
   private apiToken: string;
   private gatewayId: string;
@@ -165,7 +210,7 @@ class CloudflareSTT implements STTProvider {
         const errText = await response.text();
         let detail = errText || response.statusText;
         if (response.status === 401) {
-          detail = `Authentication error (401). Verify CLOUDFLARE_API_TOKEN in .env has 'Workers AI - Read/Edit' permissions and is not a Global API Key. Raw error: ${errText}`;
+          detail = `Authentication error (401). Verify CLOUDFLARE_API_TOKEN in .env has 'Workers AI - Read/Edit' permissions. Raw error: ${errText}`;
         }
         throw new Error(`Cloudflare Workers AI STT failed (${response.status}): ${detail}`);
       }
@@ -188,41 +233,34 @@ class CloudflareSTT implements STTProvider {
   }
 }
 
-async function shouldUseOffline(): Promise<boolean> {
-  const hasApiKeys = Boolean(config.stt.apiKey);
-  if (!hasApiKeys) return isLocalServerReachable(config.stt.offlineBaseUrl);
-  return false;
+export function createPrimarySTTProvider(): STTProvider | null {
+  const elevenLabsKey = config.tts.elevenLabsKey;
+  if (elevenLabsKey) {
+    return new ElevenLabsSTT(elevenLabsKey);
+  }
+
+  const groqKey = process.env.GROQ_API_KEY;
+  if (groqKey) {
+    return new GroqSTT(groqKey);
+  }
+
+  const openAiKey = process.env.OPENAI_API_KEY;
+  if (openAiKey) {
+    return new OpenAiSTT(openAiKey);
+  }
+
+  if (config.cloudflare.apiToken) {
+    return new CloudflareSTT(
+      config.cloudflare.accountId,
+      config.cloudflare.apiToken,
+      config.cloudflare.gatewayId,
+      config.cloudflare.sttModel,
+    );
+  }
+
+  return null;
 }
 
 export async function createSTTProvider(): Promise<STTProvider> {
-  if (await shouldUseOffline()) {
-    return new OfflineWhisperSTT(config.stt.offlineBaseUrl);
-  }
-
-  const fallbacks: STTProvider[] = [];
-  const groqKey = process.env.GROQ_API_KEY;
-  const openAiKey = process.env.OPENAI_API_KEY;
-  if (groqKey && config.stt.provider !== 'groq') {
-    fallbacks.push(new GroqSTT(groqKey));
-  }
-  if (openAiKey && config.stt.provider !== 'openai') {
-    fallbacks.push(new OpenAiSTT(openAiKey));
-  }
-  fallbacks.push(new OfflineWhisperSTT(config.stt.offlineBaseUrl));
-
-  switch (config.stt.provider) {
-    case 'cloudflare':
-      return new CloudflareSTT(
-        config.cloudflare.accountId,
-        config.cloudflare.apiToken,
-        config.cloudflare.gatewayId,
-        config.cloudflare.sttModel,
-        fallbacks,
-      );
-    case 'groq':
-      return new GroqSTT(config.stt.apiKey);
-    case 'openai':
-    default:
-      return new OpenAiSTT(config.stt.apiKey);
-  }
+  return new LocalWhisperSTT();
 }

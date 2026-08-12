@@ -46,9 +46,9 @@ export const config = {
     fishAudioKey,
     elevenLabsKey,
     azureKey,
-    referenceId: process.env.FISH_AUDIO_REFERENCE_ID || process.env.FISH_AUDIO_VOICE_ID || '',
+    referenceId: process.env.FISH_AUDIO_REFERENCE_ID || process.env.FISH_AUDIO_VOICE_ID || '933563129e564b19a115bedd57b7406a',
     model: process.env.FISH_AUDIO_MODEL || 's2.1-pro-free',
-    voiceId: process.env.ELEVENLABS_VOICE_ID || 'QTKSa2Iyv0yoxvXY2V8a',
+    voiceId: process.env.ELEVENLABS_VOICE_ID || 'C8uRRxxNZH0vRqJbVFJy',
     region: process.env.AZURE_SPEECH_REGION || '',
   },
   server: {

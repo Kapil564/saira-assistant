@@ -4,9 +4,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { executeIntent } from '../actions/executor';
-import { createLLMProvider } from '../providers/llm';
-import { createSTTProvider } from '../providers/stt';
-import { createTTSProvider, type TTSProvider } from '../providers/tts';
+import { createSTTRouter } from '../providers/stt-router';
+import { createLLMRouter } from '../providers/llm-router';
+import { createTTSRouter } from '../providers/tts-router';
+import { ensureFullSetupReady } from '../providers/setup-manager';
+import { type TTSProvider } from '../providers/tts';
 import { config } from '../shared/config';
 import { initMemoryStorage } from '../memory/markdown-memory';
 import { assembleContext } from '../memory/context-pipeline';
@@ -26,9 +28,12 @@ export async function createOrchestrator(): Promise<Orchestrator> {
   // Initialize Markdown memory directory and manifest
   initMemoryStorage();
 
-  const stt = await createSTTProvider();
-  const llm = await createLLMProvider();
-  const tts = createTTSProvider();
+  // Ensure full local setup (Ollama LLM + Whisper STT + Piper TTS) is ready in background
+  ensureFullSetupReady().catch((err) => console.error('[Setup Init Error]:', err));
+
+  const stt = createSTTRouter();
+  const llm = createLLMRouter();
+  const tts = createTTSRouter();
 
   io.on('connection', (socket) => {
     console.log('renderer connected');
