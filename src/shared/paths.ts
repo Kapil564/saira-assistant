@@ -51,11 +51,19 @@ export function getAppPaths(): AppPaths {
   const userDataDir = getUserDataDir();
 
   // Find Drizzle migrations folder location (dev vs prod bundle)
-  let migrationsFolder = path.join(process.cwd(), 'drizzle');
-  if (!fs.existsSync(migrationsFolder)) {
-    const parentFolder = path.join(__dirname, '..', 'drizzle');
-    if (fs.existsSync(parentFolder)) {
-      migrationsFolder = parentFolder;
+  // In packaged Electron apps we are inside dist/main/index.js, so migrations live
+  // next to the bundled JS (dist/drizzle) or in the unpacked app resources directory.
+  const candidates = [
+    path.join(__dirname, '..', 'drizzle'),              // dist/main -> dist/drizzle
+    path.join(__dirname, 'drizzle'),                    // dist/drizzle
+    path.join(process.cwd(), 'drizzle'),                // dev source root
+    path.join(process.resourcesPath || '', 'drizzle'), // electron-builder resources
+  ];
+  let migrationsFolder = candidates[0];
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      migrationsFolder = candidate;
+      break;
     }
   }
 

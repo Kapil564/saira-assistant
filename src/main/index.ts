@@ -1,6 +1,30 @@
 import { app, globalShortcut, ipcMain, Tray, BrowserWindow, Menu, nativeImage, screen, powerMonitor } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+
+/**
+ * Resolve the bundled assets directory across dev, packaged (asar), and portable builds.
+ */
+function assetsPath(): string {
+  // Packaged app with electron-builder: resources/app/dist/main/index.js
+  // __dirname -> resources/app/dist/main, two levels up -> resources/app
+  const resourcesApp = path.join(__dirname, '..', '..');
+  const candidateA = path.join(resourcesApp, 'assets');
+  if (fs.existsSync(candidateA)) return candidateA;
+
+  // Unpacked / non-asar / dev fallback
+  const candidateB = path.join(__dirname, '..', '..', 'assets');
+  if (fs.existsSync(candidateB)) return candidateB;
+
+  // Electron resources dir fallback (for extraResources or unpacked assets)
+  if (process.resourcesPath) {
+    const candidateC = path.join(process.resourcesPath, 'assets');
+    if (fs.existsSync(candidateC)) return candidateC;
+  }
+
+  // Final fallback to cwd (dev source tree)
+  return path.join(process.cwd(), 'assets');
+}
 import { createOrchestrator } from '../orchestrator';
 import { startReminderPolling, checkAndFireDueReminders } from '../orchestrator/scheduler';
 import type { TTSProvider } from '../providers/tts';
@@ -11,7 +35,7 @@ let isQuitting = false;
 let orchestratorTts: TTSProvider | null = null;
 
 function getAppIcon() {
-  const iconPath = path.join(__dirname, '../../assets/icon.png');
+  const iconPath = path.join(assetsPath(), 'icon.png');
   if (fs.existsSync(iconPath)) {
     return nativeImage.createFromPath(iconPath);
   }

@@ -455,32 +455,45 @@ export class CloudflareLLM implements LLMProvider {
 }
 
 export function createPrimaryLLMProvider(): LLMProvider | null {
-  const hasApiKey = Boolean(config.llm.apiKey);
-  if (!hasApiKey && config.llm.provider !== 'ollama') {
-    return null;
-  }
+  const provider = config.llm.provider;
 
-  switch (config.llm.provider) {
+  switch (provider) {
     case 'cloudflare':
-      return new CloudflareLLM(
-        config.cloudflare.accountId,
-        config.cloudflare.apiToken,
-        config.cloudflare.gatewayId,
-        config.cloudflare.llmModel,
-      );
+      if (config.cloudflare.apiToken && config.cloudflare.accountId) {
+        return new CloudflareLLM(
+          config.cloudflare.accountId,
+          config.cloudflare.apiToken,
+          config.cloudflare.gatewayId,
+          config.cloudflare.llmModel,
+        );
+      }
+      console.warn('[LLM] Provider forced to cloudflare but CLOUDFLARE_API_TOKEN or ACCOUNT_ID missing.');
+      return null;
     case 'gemini':
-      return new GeminiLLM(config.llm.apiKey, config.llm.model);
+      if (config.llm.geminiKey) return new GeminiLLM(config.llm.geminiKey, config.llm.model);
+      console.warn('[LLM] Provider forced to gemini but GEMINI_API_KEY missing.');
+      return null;
     case 'groq':
-      return new GroqLLM(config.llm.apiKey, config.llm.model);
+      if (config.llm.groqKey) return new GroqLLM(config.llm.groqKey, config.llm.model);
+      console.warn('[LLM] Provider forced to groq but GROQ_API_KEY missing.');
+      return null;
     case 'openai':
-      return new OpenAiLLM(config.llm.apiKey, config.llm.model);
+      if (config.llm.openAiKey) return new OpenAiLLM(config.llm.openAiKey, config.llm.model);
+      console.warn('[LLM] Provider forced to openai but OPENAI_API_KEY missing.');
+      return null;
     case 'ollama':
     default:
-      return new OllamaLLM(config.llm.baseUrl, config.llm.model);
+      return null;
   }
 }
 
+/**
+ * Creates the configured cloud LLM provider, falling back to local Ollama
+ * when no matching provider key exists. Use this if you need a single LLMProvider
+ * directly rather than the LLMRouter.
+ */
 export async function createLLMProvider(): Promise<LLMProvider> {
-  // Return OllamaLLM by default if used directly
+  const primary = createPrimaryLLMProvider();
+  if (primary) return primary;
   return new OllamaLLM(config.llm.baseUrl, config.llm.model);
 }
