@@ -1,7 +1,11 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { spawn } from 'node:child_process';
 import { config } from '../shared/config';
 import { isLocalServerReachable } from '../shared/http-util';
 import type { TranscriptionResult } from '../shared/types';
-import { getSelectedModelName, isModelDownloaded } from './whisper-manager';
+import { getSelectedModelName, isModelDownloaded, getModelPath, downloadWhisperModel } from './whisper-manager';
 
 export interface STTProvider {
   name: string;
@@ -118,29 +122,132 @@ export class LocalWhisperSTT implements STTProvider {
   }
 
   async transcribe(audioBuffer: Buffer): Promise<TranscriptionResult> {
-    // Check local HTTP endpoint or local whisper runner
+    // 1. Prefer an external local faster-whisper / whisper.cpp HTTP server if available.
     if (await isLocalServerReachable(this.baseUrl)) {
-      const formData = new FormData();
-      const uint8 = new Uint8Array(audioBuffer);
-      const blob = new Blob([uint8], { type: 'audio/wav' });
-      formData.append('audio', blob, 'recording.wav');
+      try {
+        const formData = new FormData();
+        const uint8 = new Uint8Array(audioBuffer);
+        const blob = new Blob([uint8], { type: 'audio/wav' });
+        formData.append('audio', blob, 'recording.wav');
 
-      const response = await fetch(`${this.baseUrl}/transcribe`, {
-        method: 'POST',
-        body: formData as unknown as BodyInit,
-      });
+        const response = await fetch(`${this.baseUrl}/transcribe`, {
+          method: 'POST',
+          body: formData as unknown as BodyInit,
+        });
 
-      if (response.ok) {
-        const data = await response.json();
-        return { text: data.text || '' };
+        if (response.ok) {
+          const data = await response.json();
+          const text = data.text || '';
+          if (text.trim()) return { text };
+        }
+      } catch (err) {
+        console.warn('[Local Whisper STT] Local HTTP server unreachable, falling back to CLI:', err);
       }
     }
 
+    // 2. Fall back to a local whisper.cpp CLI binary if present.
     const activeModel = getSelectedModelName();
+    const modelPath = getModelPath(activeModel);
     const downloaded = isModelDownloaded(activeModel);
+
     console.log(`[Local Whisper STT] Transcribing audio buffer (${audioBuffer.length} bytes) via model "${activeModel}" (downloaded=${downloaded})...`);
 
+    if (!downloaded) {
+      console.warn(`[Local Whisper STT] Model "${activeModel}" not downloaded. Attempting download...`);
+      await downloadWhisperModel(activeModel);
+    }
+
+    const cliBinary = process.env.WHISPER_CPP_BINARY || findExecutableInPath('whisper-cpp') || findExecutableInPath('whisper');
+    if (cliBinary && fs.existsSync(modelPath)) {
+      try {
+        const text = await transcribeWithWhisperCli(audioBuffer, cliBinary, modelPath);
+        return { text };
+      } catch (err) {
+        console.warn('[Local Whisper STT] CLI transcription failed:', err);
+      }
+    }
+
+    console.warn('[Local Whisper STT] No usable local whisper backend found. Options:');
+    console.warn('  - Set WHISPER_CPP_BINARY to a whisper.cpp main executable');
+    console.warn('  - Start a local server at', this.baseUrl);
+    console.warn('  - Configure an API key for cloud STT');
     return { text: '' };
+  }
+}
+
+
+function findExecutableInPath(name: string): string | undefined {
+  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
+  const paths = (process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':');
+  for (const dir of paths) {
+    for (const ext of extensions) {
+      const full = path.join(dir, name + ext);
+      try {
+        if (fs.existsSync(full) && !fs.statSync(full).isDirectory()) return full;
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return undefined;
+}
+
+function writeTempWav(buffer: Buffer): string {
+  const tmp = path.join(os.tmpdir(), `saira_stt_${Date.now()}.wav`);
+  fs.writeFileSync(tmp, buffer);
+  return tmp;
+}
+
+function transcribeWithWhisperCli(audioBuffer: Buffer, cliBinary: string, modelPath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const tmpWav = writeTempWav(audioBuffer);
+    const outputTxt = `${tmpWav}.txt`;
+    const args = [
+      '-m', modelPath,
+      '-f', tmpWav,
+      '-otxt',
+      '-of', tmpWav,
+      '-l', 'en',
+    ];
+
+    console.log(`[Local Whisper STT] Running: ${cliBinary} ${args.join(' ')}`);
+    const proc = spawn(cliBinary, args, { windowsHide: true });
+
+    let stderr = '';
+    proc.stderr?.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('error', (err) => {
+      cleanupFiles(tmpWav, outputTxt);
+      reject(err);
+    });
+
+    proc.on('close', (code) => {
+      try {
+        let text = '';
+        if (fs.existsSync(outputTxt)) {
+          text = fs.readFileSync(outputTxt, 'utf-8').replace(/\[.*?\]/g, '').trim();
+          fs.unlinkSync(outputTxt);
+        }
+        cleanupFiles(tmpWav);
+        if (code !== 0) {
+          reject(new Error(`whisper.cpp exited ${code}: ${stderr || 'no stderr'}`));
+        } else {
+          resolve(text);
+        }
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
+function cleanupFiles(...files: string[]): void {
+  for (const f of files) {
+    try {
+      if (fs.existsSync(f)) fs.unlinkSync(f);
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -234,33 +341,39 @@ export class CloudflareSTT implements STTProvider {
 }
 
 export function createPrimarySTTProvider(): STTProvider | null {
-  const elevenLabsKey = config.tts.elevenLabsKey;
-  if (elevenLabsKey) {
-    return new ElevenLabsSTT(elevenLabsKey);
-  }
+  const provider = config.stt.provider;
 
-  const groqKey = process.env.GROQ_API_KEY;
-  if (groqKey) {
-    return new GroqSTT(groqKey);
+  switch (provider) {
+    case 'openai':
+      if (config.stt.openAiKey) return new OpenAiSTT(config.stt.openAiKey);
+      console.warn('[STT] Provider forced to openai but OPENAI_API_KEY missing.');
+      return null;
+    case 'groq':
+      if (config.stt.groqKey) return new GroqSTT(config.stt.groqKey);
+      console.warn('[STT] Provider forced to groq but GROQ_API_KEY missing.');
+      return null;
+    case 'cloudflare':
+      if (config.cloudflare.apiToken && config.cloudflare.accountId) {
+        return new CloudflareSTT(
+          config.cloudflare.accountId,
+          config.cloudflare.apiToken,
+          config.cloudflare.gatewayId,
+          config.cloudflare.sttModel,
+        );
+      }
+      console.warn('[STT] Provider forced to cloudflare but CLOUDFLARE_API_TOKEN or ACCOUNT_ID missing.');
+      return null;
+    default:
+      return null;
   }
-
-  const openAiKey = process.env.OPENAI_API_KEY;
-  if (openAiKey) {
-    return new OpenAiSTT(openAiKey);
-  }
-
-  if (config.cloudflare.apiToken) {
-    return new CloudflareSTT(
-      config.cloudflare.accountId,
-      config.cloudflare.apiToken,
-      config.cloudflare.gatewayId,
-      config.cloudflare.sttModel,
-    );
-  }
-
-  return null;
 }
 
+/**
+ * Creates the configured cloud STT provider with automatic fallback to local Whisper.
+ * Use this if you want an STTProvider directly, rather than the STTRouter.
+ */
 export async function createSTTProvider(): Promise<STTProvider> {
+  const primary = createPrimarySTTProvider();
+  if (primary) return primary;
   return new LocalWhisperSTT();
 }

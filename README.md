@@ -60,9 +60,30 @@ pnpm dev
 pnpm start
 ```
 
+## Download and install
+
+### For users (no code required)
+
+1. Go to the [Releases](https://github.com/Kapil564/saira-assistant/releases) page.
+2. Download the latest asset for your situation:
+
+| File | Use when |
+|---|---|
+| `Saira Setup X.Y.Z.exe` | You have admin rights and want a normal installer |
+| `Saira-X.Y.Z-portable.exe` | You want to run without installing / no admin rights |
+3. Run the downloaded `.exe`. Windows may show a SmartScreen warning — click **More info → Run anyway**.
+4. On first launch, copy `.env.example` to `.env` inside `%APPDATA%\Saira` and fill in only the API keys you have.
+
+> **No API keys?** Leave them blank. Saira will use free Windows SAPI5 TTS + local Ollama LLM + local faster-whisper STT (if those local services are running).
+
 ## Building the installer
 
 ```bash
+# 1. Install and rebuild native deps for Electron
+pnpm install
+pnpm rebuild
+
+# 2. Bundle TypeScript and create the installer/portable executables
 pnpm build
 pnpm pack
 ```
