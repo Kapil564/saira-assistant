@@ -1,16 +1,19 @@
-appId: com.yourname.saira-assistant
+appId: com.kapil564.saira
 productName: Saira
 copyright: Copyright © 2026
 directories:
   output: release
-  buildResources: build
 files:
   - dist
+  - drizzle
   - package.json
   - assets
 win:
   target:
     - target: nsis
+      arch:
+        - x64
+    - target: portable
       arch:
         - x64
   icon: assets/icon.png

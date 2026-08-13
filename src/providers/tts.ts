@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { config } from '../shared/config';
-import { getSelectedVoiceName, isVoiceDownloaded } from './piper-manager';
+import { getSelectedVoiceName, isVoiceDownloaded, getVoicePath, downloadPiperVoice } from './piper-manager';
 
 export interface TTSProvider {
   name: string;
@@ -146,6 +146,7 @@ export class LinuxTTS implements TTSProvider {
 export class PiperLocalTTS implements TTSProvider {
   public name = 'local-piper';
   private fallback: TTSProvider;
+  private child: ChildProcess | null = null;
 
   constructor() {
     this.fallback = createFallbackTTS();
@@ -153,15 +154,80 @@ export class PiperLocalTTS implements TTSProvider {
 
   async speak(text: string): Promise<void> {
     const activeVoice = getSelectedVoiceName();
+    const voicePath = getVoicePath(activeVoice);
     const downloaded = isVoiceDownloaded(activeVoice);
+
     console.log(`[Piper Local TTS] Synthesizing "${text.slice(0, 30)}..." via voice model "${activeVoice}" (downloaded=${downloaded})...`);
 
-    return await this.fallback.speak(text);
+    if (!downloaded) {
+      console.warn(`[Piper Local TTS] Voice "${activeVoice}" not downloaded. Attempting download...`);
+      await downloadPiperVoice(activeVoice);
+    }
+
+    const piperBinary = process.env.PIPER_BINARY || findExecutableInPath('piper') || findExecutableInPath('piper-tts');
+    if (!piperBinary || !fs.existsSync(voicePath)) {
+      console.warn('[Piper Local TTS] Piper binary or voice model missing. Falling back to platform TTS.');
+      return this.fallback.speak(text);
+    }
+
+    return new Promise((resolve, reject) => {
+      try {
+        const outputWav = path.join(os.tmpdir(), `saira_piper_${Date.now()}.wav`);
+        const args = ['-m', voicePath, '-f', outputWav, '-c'];
+        console.log(`[Piper Local TTS] Running: ${piperBinary} ${args.join(' ')}`);
+
+        this.child = spawn(piperBinary, args, { windowsHide: true });
+        let stderr = '';
+        this.child.stderr?.on('data', (data) => { stderr += data.toString(); });
+
+        this.child.on('error', (err) => {
+          cleanupPiperFiles(outputWav);
+          this.child = null;
+          reject(err);
+        });
+
+        this.child.on('close', async (code) => {
+          this.child = null;
+          if (code !== 0 || !fs.existsSync(outputWav)) {
+            cleanupPiperFiles(outputWav);
+            reject(new Error(`Piper exited ${code}: ${stderr || 'no stderr'}`));
+            return;
+          }
+          try {
+            const buffer = fs.readFileSync(outputWav);
+            cleanupPiperFiles(outputWav);
+            await playAudioBuffer(buffer);
+            resolve();
+          } catch (err) {
+            cleanupPiperFiles(outputWav);
+            reject(err);
+          }
+        });
+
+        // Piper reads text from stdin when -c is provided
+        this.child.stdin?.write(text, 'utf-8');
+        this.child.stdin?.end();
+      } catch (err) {
+        reject(err);
+      }
+    });
   }
 
   stop(): void {
     stopActivePlayback();
     this.fallback.stop();
+    if (this.child && !this.child.killed) {
+      try {
+        const pid = this.child.pid;
+        this.child.kill('SIGKILL');
+        if (os.platform() === 'win32' && pid) {
+          spawn('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true });
+        }
+      } catch {
+        // ignore
+      }
+      this.child = null;
+    }
   }
 }
 
@@ -422,35 +488,79 @@ function createFallbackTTS(): TTSProvider {
 }
 
 export function createPrimaryTTSProvider(): TTSProvider | null {
-  // Priority 1: Fish Audio
-  if (config.tts.fishAudioKey) {
-    return new FishAudioTTS(config.tts.fishAudioKey, config.tts.referenceId, config.tts.model);
-  }
+  const provider = config.tts.provider;
 
-  // Priority 2: ElevenLabs
-  if (config.tts.apiKey) {
-    return new ElevenLabsTTS(config.tts.apiKey, config.tts.voiceId);
+  switch (provider) {
+    case 'fishaudio':
+      if (config.tts.fishAudioKey) {
+        return new FishAudioTTS(config.tts.fishAudioKey, config.tts.referenceId, config.tts.model);
+      }
+      console.warn('[TTS] Provider forced to fishaudio but FISH_AUDIO_API_KEY missing.');
+      return null;
+    case 'elevenlabs':
+      if (config.tts.elevenLabsKey) {
+        return new ElevenLabsTTS(config.tts.elevenLabsKey, config.tts.voiceId);
+      }
+      console.warn('[TTS] Provider forced to elevenlabs but ELEVENLABS_API_KEY missing.');
+      return null;
+    case 'azure':
+      if (config.tts.azureKey && config.tts.region) {
+        return new AzureTTS(config.tts.azureKey, config.tts.region);
+      }
+      console.warn('[TTS] Provider forced to azure but AZURE_SPEECH_KEY and/or AZURE_SPEECH_REGION missing.');
+      return null;
+    case 'cloudflare':
+      if (config.cloudflare.accountId && config.cloudflare.apiToken) {
+        return new CloudflareElevenLabsTTS(
+          config.cloudflare.accountId,
+          config.cloudflare.apiToken,
+          config.cloudflare.gatewayId,
+          config.cloudflare.ttsModel,
+          config.tts.voiceId,
+        );
+      }
+      console.warn('[TTS] Provider forced to cloudflare but CLOUDFLARE_API_TOKEN or ACCOUNT_ID missing.');
+      return null;
+    case 'sapi5':
+    default:
+      return null;
   }
+}
 
-  // Priority 3: Azure Speech
-  if (config.tts.apiKey && config.tts.region) {
-    return new AzureTTS(config.tts.apiKey, config.tts.region);
+/**
+ * Creates the configured cloud TTS provider, falling back to the local
+ * platform TTS provider when no cloud key is available. Use this if you need a
+ * single TTSProvider directly rather than the TTSRouter.
+ */
+
+function findExecutableInPath(name: string): string | undefined {
+  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
+  const paths = (process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':');
+  for (const dir of paths) {
+    for (const ext of extensions) {
+      const full = path.join(dir, name + ext);
+      try {
+        if (fs.existsSync(full) && !fs.statSync(full).isDirectory()) return full;
+      } catch {
+        // ignore
+      }
+    }
   }
+  return undefined;
+}
 
-  // Priority 4: Cloudflare Workers AI
-  if (config.cloudflare.accountId && config.cloudflare.apiToken) {
-    return new CloudflareElevenLabsTTS(
-      config.cloudflare.accountId,
-      config.cloudflare.apiToken,
-      config.cloudflare.gatewayId,
-      config.cloudflare.ttsModel,
-      config.tts.voiceId,
-    );
+function cleanupPiperFiles(...files: string[]): void {
+  for (const f of files) {
+    try {
+      if (fs.existsSync(f)) fs.unlinkSync(f);
+    } catch {
+      // ignore
+    }
   }
-
-  return null;
 }
 
 export function createTTSProvider(): TTSProvider {
-  return new PiperLocalTTS();
+  const primary = createPrimaryTTSProvider();
+  if (primary) return primary;
+  return createFallbackTTS();
 }
