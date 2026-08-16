@@ -36,11 +36,11 @@ export async function getFullSetupStatus(): Promise<SetupStatus> {
 
   let stepText = 'Saira local offline models are fully set up and ready.';
   if (!ollamaReady) {
-    stepText = `Setting up Saira (1/3): Downloading local Ollama model (${ollama.downloadProgress}%)...`;
+    stepText = `Setting up Saira (1/3): Pulling Ollama LLM model (${ollama.downloadProgress}%)...`;
   } else if (!whisperReady) {
-    stepText = `Setting up Saira (2/3): Downloading local Whisper model (${whisper.downloadProgress}%)...`;
+    stepText = `Setting up Saira (2/3): Downloading Whisper STT model (${whisper.downloadProgress}%)...`;
   } else if (!piperReady) {
-    stepText = `Setting up Saira (3/3): Downloading local Piper voice model (${piper.downloadProgress}%)...`;
+    stepText = `Setting up Saira (3/3): Downloading Piper voice model (${piper.downloadProgress}%)...`;
   }
 
   return {
@@ -75,7 +75,7 @@ export async function runFullSetupSequence(
       await pullLocalModel((percent) => {
         const overall = Math.round((percent / 100) * 70);
         if (onProgress) {
-          onProgress(overall, `Setting up Saira (1/3): Pulling Ollama LLM model ${percent}%`);
+          onProgress(overall, `Step 1/3 (Ollama LLM): ${percent}%`);
         }
       });
     }
@@ -87,7 +87,7 @@ export async function runFullSetupSequence(
       await downloadWhisperModel(whisperStatus.modelName, (percent) => {
         const overall = Math.round(70 + (percent / 100) * 20);
         if (onProgress) {
-          onProgress(overall, `Setting up Saira (2/3): Downloading Whisper STT model ${percent}%`);
+          onProgress(overall, `Step 2/3 (Whisper STT): ${percent}%`);
         }
       });
     }
@@ -99,7 +99,7 @@ export async function runFullSetupSequence(
       await downloadPiperVoice(piperStatus.voiceName, (percent) => {
         const overall = Math.round(90 + (percent / 100) * 10);
         if (onProgress) {
-          onProgress(overall, `Setting up Saira (3/3): Downloading Piper voice model ${percent}%`);
+          onProgress(overall, `Step 3/3 (Piper TTS): ${percent}%`);
         }
       });
     }
@@ -117,6 +117,8 @@ export async function runFullSetupSequence(
   }
 }
 
+let lastReportedOverall = -1;
+
 /**
  * Non-blocking auto-check executed on application startup.
  */
@@ -125,8 +127,11 @@ export async function ensureFullSetupReady(): Promise<void> {
   if (!status.isComplete) {
     console.log('[Setup Manager] Auto-triggering 3-step background setup for offline models...');
     runFullSetupSequence((percent, text) => {
-      if (percent % 25 === 0) {
-        console.log(`[Setup Progress]: ${percent}% - ${text}`);
+      // Throttle logging to 10% step intervals to prevent spam
+      const step10 = Math.floor(percent / 10) * 10;
+      if (step10 !== lastReportedOverall || percent === 100) {
+        lastReportedOverall = step10;
+        console.log(`[Setup Progress]: Overall ${percent}% | ${text}`);
       }
     }).catch((err) => {
       console.error('[Setup Auto-Run Error]:', err);

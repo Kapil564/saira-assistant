@@ -73,7 +73,18 @@ export async function createOrchestrator(): Promise<Orchestrator> {
         socket.emit('transcript', { text: transcription.text });
 
         const userText = transcription.text.trim();
-        if (!userText) return;
+        if (!userText) {
+          console.warn('[STT Warning] Received empty transcription. Prompting user to repeat...');
+          const emptyResponse = {
+            spoken: "I didn't quite catch that. Could you please try repeating?",
+            display: "I didn't catch that. Could you please try repeating?",
+          };
+          socket.emit('response', emptyResponse);
+          if (tts) {
+            tts.speak(emptyResponse.spoken).catch(() => {});
+          }
+          return;
+        }
 
         // 1. Add user message to SQLite DB
         addMessage({ sessionId, role: 'user', content: userText });

@@ -6,6 +6,7 @@ import { config } from '../shared/config';
 import { isLocalServerReachable } from '../shared/http-util';
 import type { TranscriptionResult } from '../shared/types';
 import { getSelectedModelName, isModelDownloaded, getModelPath, downloadWhisperModel } from './whisper-manager';
+import { getAppPaths } from '../shared/paths';
 
 export interface STTProvider {
   name: string;
@@ -157,7 +158,7 @@ export class LocalWhisperSTT implements STTProvider {
       await downloadWhisperModel(activeModel);
     }
 
-    const cliBinary = process.env.WHISPER_CPP_BINARY || findExecutableInPath('whisper-cpp') || findExecutableInPath('whisper');
+    const cliBinary = findWhisperExecutable();
     if (cliBinary && fs.existsSync(modelPath)) {
       try {
         const text = await transcribeWithWhisperCli(audioBuffer, cliBinary, modelPath);
@@ -175,6 +176,33 @@ export class LocalWhisperSTT implements STTProvider {
   }
 }
 
+
+function findWhisperExecutable(): string | undefined {
+  if (process.env.WHISPER_CPP_BINARY && fs.existsSync(process.env.WHISPER_CPP_BINARY)) {
+    return process.env.WHISPER_CPP_BINARY;
+  }
+
+  try {
+    const binDir = path.join(getAppPaths().userDataDir, 'bin');
+    const appBinCandidates = [
+      path.join(binDir, 'whisper-cli.exe'),
+      path.join(binDir, 'main.exe'),
+      path.join(binDir, 'whisper.exe'),
+    ];
+    for (const candidate of appBinCandidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch {
+    // ignore
+  }
+
+  return (
+    findExecutableInPath('whisper-cli') ||
+    findExecutableInPath('whisper-cpp') ||
+    findExecutableInPath('whisper') ||
+    findExecutableInPath('main')
+  );
+}
 
 function findExecutableInPath(name: string): string | undefined {
   const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];

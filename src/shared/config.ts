@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { z } from 'zod';
 
 const providerSchema = z.enum(['openai', 'gemini', 'groq', 'ollama', 'cloudflare']);
-const sttSchema = z.enum(['openai', 'groq', 'cloudflare']);
+const sttSchema = z.enum(['openai', 'groq', 'cloudflare', 'elevenlabs', 'whisper']);
 const ttsSchema = z.enum(['sapi5', 'fishaudio', 'elevenlabs', 'azure', 'cloudflare']);
 
 const openAiKey = process.env.OPENAI_API_KEY || '';
@@ -18,7 +18,7 @@ const cloudflareGatewayId = process.env.CLOUDFLARE_GATEWAY_ID || '';
 
 const defaultStt = (cloudflareAccountId && cloudflareApiToken)
   ? 'cloudflare'
-  : (groqKey ? 'groq' : (openAiKey ? 'openai' : 'cloudflare'));
+  : (elevenLabsKey ? 'elevenlabs' : (groqKey ? 'groq' : (openAiKey ? 'openai' : 'whisper')));
 const defaultLlm = (cloudflareAccountId && cloudflareApiToken)
   ? 'cloudflare'
   : (geminiKey ? 'gemini' : (groqKey ? 'groq' : (openAiKey ? 'openai' : 'ollama')));
