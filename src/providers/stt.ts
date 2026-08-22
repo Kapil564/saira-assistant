@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { config } from '../shared/config';
 import { isLocalServerReachable } from '../shared/http-util';
 import type { TranscriptionResult } from '../shared/types';
-import { getSelectedModelName, isModelDownloaded, getModelPath, downloadWhisperModel } from './whisper-manager';
+import { getSelectedModelName, isModelDownloaded, getModelPath, downloadWhisperModel, downloadWhisperBinary } from './whisper-manager';
 import { getAppPaths } from '../shared/paths';
 
 export interface STTProvider {
@@ -158,7 +158,13 @@ export class LocalWhisperSTT implements STTProvider {
       await downloadWhisperModel(activeModel);
     }
 
-    const cliBinary = findWhisperExecutable();
+    let cliBinary = findWhisperExecutable();
+    if (!cliBinary) {
+      console.log('[Local Whisper STT] Executable binary not found. Attempting automatic download...');
+      await downloadWhisperBinary();
+      cliBinary = findWhisperExecutable();
+    }
+
     if (cliBinary && fs.existsSync(modelPath)) {
       try {
         const text = await transcribeWithWhisperCli(audioBuffer, cliBinary, modelPath);
@@ -188,6 +194,12 @@ function findWhisperExecutable(): string | undefined {
       path.join(binDir, 'whisper-cli.exe'),
       path.join(binDir, 'main.exe'),
       path.join(binDir, 'whisper.exe'),
+      path.join(binDir, 'whisper-cli'),
+      path.join(binDir, 'main'),
+      path.join(binDir, 'whisper'),
+      path.join(binDir, 'whisper-bin-x64', 'whisper-cli.exe'),
+      path.join(binDir, 'whisper-bin-x64', 'main.exe'),
+      path.join(binDir, 'whisper.cpp', 'whisper-cli.exe'),
     ];
     for (const candidate of appBinCandidates) {
       if (fs.existsSync(candidate)) return candidate;
@@ -205,8 +217,8 @@ function findWhisperExecutable(): string | undefined {
 }
 
 function findExecutableInPath(name: string): string | undefined {
-  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
-  const paths = (process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':');
+  const extensions = ['.exe', '.cmd', '.bat', ''];
+  const paths = (process.env.PATH || '').split(';');
   for (const dir of paths) {
     for (const ext of extensions) {
       const full = path.join(dir, name + ext);

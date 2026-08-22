@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 const providerSchema = z.enum(['openai', 'gemini', 'groq', 'ollama', 'cloudflare']);
 const sttSchema = z.enum(['openai', 'groq', 'cloudflare', 'elevenlabs', 'whisper']);
-const ttsSchema = z.enum(['sapi5', 'fishaudio', 'elevenlabs', 'azure', 'cloudflare']);
+const ttsSchema = z.enum(['piper', 'fishaudio', 'elevenlabs', 'azure', 'cloudflare']);
 
 const openAiKey = process.env.OPENAI_API_KEY || '';
 const groqKey = process.env.GROQ_API_KEY || '';
@@ -24,7 +24,7 @@ const defaultLlm = (cloudflareAccountId && cloudflareApiToken)
   : (geminiKey ? 'gemini' : (groqKey ? 'groq' : (openAiKey ? 'openai' : 'ollama')));
 const defaultTts = fishAudioKey
   ? 'fishaudio'
-  : (elevenLabsKey ? 'elevenlabs' : ((cloudflareAccountId && cloudflareApiToken) ? 'cloudflare' : (azureKey ? 'azure' : 'sapi5')));
+  : (elevenLabsKey ? 'elevenlabs' : ((cloudflareAccountId && cloudflareApiToken) ? 'cloudflare' : (azureKey ? 'azure' : 'piper')));
 
 export const config = {
   cloudflare: {

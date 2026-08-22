@@ -3,7 +3,8 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { config } from '../shared/config';
-import { getSelectedVoiceName, isVoiceDownloaded, getVoicePath, downloadPiperVoice } from './piper-manager';
+import { getSelectedVoiceName, isVoiceDownloaded, getVoicePath, downloadPiperVoice, downloadPiperBinary } from './piper-manager';
+import { getAppPaths } from '../shared/paths';
 
 export interface TTSProvider {
   name: string;
@@ -18,7 +19,7 @@ function stopActivePlayback(): void {
     try {
       const pid = activePlaybackProcess.pid;
       activePlaybackProcess.kill('SIGKILL');
-      if (os.platform() === 'win32' && pid) {
+      if (pid) {
         spawn('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true });
       }
     } catch {
@@ -37,20 +38,43 @@ function spawnPowerShellScript(script: string): ChildProcess {
 
 function playAudioBuffer(buffer: Buffer): Promise<void> {
   stopActivePlayback();
-  const tempFile = path.join(os.tmpdir(), `saira_speech_${Date.now()}.${buffer.slice(0, 3).toString('utf8') === 'ID3' || buffer[0] === 0xff ? 'mp3' : 'wav'}`);
+  const isMp3 = buffer.slice(0, 3).toString('utf8') === 'ID3' || buffer[0] === 0xff;
+  const ext = isMp3 ? 'mp3' : 'wav';
+  const tempFile = path.join(os.tmpdir(), `saira_speech_${Date.now()}.${ext}`);
   fs.writeFileSync(tempFile, buffer);
 
   return new Promise((resolve) => {
-    if (os.platform() === 'win32') {
-      const script = `
-        $player = New-Object System.Media.SoundPlayer;
-        $player.SoundLocation = "${tempFile.replace(/\\/g, '\\\\')}";
-        $player.PlaySync();
-      `;
-      activePlaybackProcess = spawnPowerShellScript(script);
-    } else {
-      activePlaybackProcess = spawn('afplay', [tempFile]);
-    }
+    const script = `
+      try {
+        Add-Type -AssemblyName presentationCore
+        $player = New-Object System.Windows.Media.MediaPlayer
+        $player.Open([Uri]"file:///${tempFile.replace(/\\/g, '/')}")
+        $waited = 0
+        while ($player.NaturalDuration.HasTimeSpan -eq $false -and $waited -lt 40) {
+          Start-Sleep -Milliseconds 100
+          $waited++
+        }
+        $player.Play()
+        if ($player.NaturalDuration.HasTimeSpan) {
+          $ms = [math]::Ceiling($player.NaturalDuration.TimeSpan.TotalMilliseconds)
+          Start-Sleep -Milliseconds ($ms + 300)
+        } else {
+          Start-Sleep -Seconds 5
+        }
+        $player.Close()
+      } catch {
+        try {
+          $wmp = New-Object -ComObject WMPlayer.OCX
+          $wmp.URL = "${tempFile.replace(/\\/g, '\\\\')}"
+          $wmp.controls.play()
+          while ($wmp.playState -ne 1 -and $wmp.playState -ne 8) { Start-Sleep -Milliseconds 200 }
+        } catch {
+          $sp = New-Object System.Media.SoundPlayer("${tempFile.replace(/\\/g, '\\\\')}")
+          $sp.PlaySync()
+        }
+      }
+    `;
+    activePlaybackProcess = spawnPowerShellScript(script);
 
     activePlaybackProcess.on('close', () => {
       try {
@@ -69,88 +93,9 @@ function playAudioBuffer(buffer: Buffer): Promise<void> {
   });
 }
 
-export class SAPI5TTS implements TTSProvider {
-  public name = 'sapi5';
-  private child: ChildProcess | null = null;
-
-  async speak(text: string): Promise<void> {
-    const base64Text = Buffer.from(text, 'utf-16le').toString('base64');
-    const script = `
-      Add-Type -AssemblyName System.Speech;
-      $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;
-      $text = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String("${base64Text}"));
-      $synth.Speak($text);
-    `;
-    return new Promise((resolve) => {
-      this.child = spawnPowerShellScript(script);
-      this.child.on('error', () => {
-        this.child = null;
-        resolve();
-      });
-      this.child.on('close', () => {
-        this.child = null;
-        resolve();
-      });
-    });
-  }
-
-  stop(): void {
-    if (this.child && !this.child.killed) {
-      try {
-        const pid = this.child.pid;
-        this.child.kill('SIGKILL');
-        if (os.platform() === 'win32' && pid) {
-          spawn('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true });
-        }
-      } catch {
-        // ignore
-      }
-      this.child = null;
-    }
-  }
-}
-
-export class LinuxTTS implements TTSProvider {
-  public name = 'linux';
-  private child: ChildProcess | null = null;
-
-  async speak(text: string): Promise<void> {
-    const trimmed = text.replace(/"/g, '\\"');
-    const command = os.platform() === 'darwin' ? 'say' : 'espeak';
-    const args = os.platform() === 'darwin' ? [trimmed] : ['-v', 'en', trimmed];
-    return new Promise((resolve) => {
-      this.child = spawn(command, args);
-      this.child.on('error', () => {
-        this.child = null;
-        resolve();
-      });
-      this.child.on('close', () => {
-        this.child = null;
-        resolve();
-      });
-    });
-  }
-
-  stop(): void {
-    if (this.child && !this.child.killed) {
-      try {
-        this.child.kill('SIGKILL');
-      } catch {
-        // ignore
-      }
-      this.child = null;
-    }
-  }
-}
-
 export class PiperLocalTTS implements TTSProvider {
   public name = 'local-piper';
-  private fallback: TTSProvider;
   private child: ChildProcess | null = null;
-
-  constructor() {
-    this.fallback = createFallbackTTS();
-  }
 
   async speak(text: string): Promise<void> {
     const activeVoice = getSelectedVoiceName();
@@ -164,10 +109,16 @@ export class PiperLocalTTS implements TTSProvider {
       await downloadPiperVoice(activeVoice);
     }
 
-    const piperBinary = process.env.PIPER_BINARY || findExecutableInPath('piper') || findExecutableInPath('piper-tts');
+    let piperBinary = findPiperExecutable();
+    if (!piperBinary) {
+      console.warn('[Piper Local TTS] Piper executable binary missing. Attempting automatic download...');
+      await downloadPiperBinary();
+      piperBinary = findPiperExecutable();
+    }
+
     if (!piperBinary || !fs.existsSync(voicePath)) {
-      console.warn('[Piper Local TTS] Piper binary or voice model missing. Falling back to platform TTS.');
-      return this.fallback.speak(text);
+      console.warn('[Piper Local TTS] Unable to locate Piper binary or voice model file after download attempts.');
+      return;
     }
 
     return new Promise((resolve, reject) => {
@@ -215,12 +166,11 @@ export class PiperLocalTTS implements TTSProvider {
 
   stop(): void {
     stopActivePlayback();
-    this.fallback.stop();
     if (this.child && !this.child.killed) {
       try {
         const pid = this.child.pid;
         this.child.kill('SIGKILL');
-        if (os.platform() === 'win32' && pid) {
+        if (pid) {
           spawn('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true });
         }
       } catch {
@@ -483,8 +433,7 @@ export class CloudflareElevenLabsTTS implements TTSProvider {
 }
 
 function createFallbackTTS(): TTSProvider {
-  if (os.platform() === 'win32') return new SAPI5TTS();
-  return new LinuxTTS();
+  return new PiperLocalTTS();
 }
 
 export function createPrimaryTTSProvider(): TTSProvider | null {
@@ -521,7 +470,7 @@ export function createPrimaryTTSProvider(): TTSProvider | null {
       }
       console.warn('[TTS] Provider forced to cloudflare but CLOUDFLARE_API_TOKEN or ACCOUNT_ID missing.');
       return null;
-    case 'sapi5':
+    case 'piper':
     default:
       return null;
   }
@@ -533,9 +482,34 @@ export function createPrimaryTTSProvider(): TTSProvider | null {
  * single TTSProvider directly rather than the TTSRouter.
  */
 
+function findPiperExecutable(): string | undefined {
+  if (process.env.PIPER_BINARY && fs.existsSync(process.env.PIPER_BINARY)) {
+    return process.env.PIPER_BINARY;
+  }
+
+  try {
+    const binDir = path.join(getAppPaths().userDataDir, 'bin');
+    const candidates = [
+      path.join(binDir, 'piper.exe'),
+      path.join(binDir, 'piper-tts.exe'),
+      path.join(binDir, 'piper', 'piper.exe'),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch {
+    // ignore
+  }
+
+  return (
+    findExecutableInPath('piper') ||
+    findExecutableInPath('piper-tts')
+  );
+}
+
 function findExecutableInPath(name: string): string | undefined {
-  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
-  const paths = (process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':');
+  const extensions = ['.exe', '.cmd', '.bat', ''];
+  const paths = (process.env.PATH || '').split(';');
   for (const dir of paths) {
     for (const ext of extensions) {
       const full = path.join(dir, name + ext);

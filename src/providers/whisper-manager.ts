@@ -1,10 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
+import { spawn } from 'node:child_process';
 import { getAppPaths } from '../shared/paths';
 
 export interface WhisperStatus {
   modelName: string; // 'small.en' | 'base.en'
   modelDownloaded: boolean;
+  binaryDownloaded: boolean;
   downloading: boolean;
   downloadProgress: number; // 0 to 100
   statusText: string;
@@ -15,6 +18,8 @@ const MODEL_URLS: Record<string, string> = {
   'small.en': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
   'base.en': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
 };
+
+const WHISPER_WINDOWS_BIN_URL = 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.7.1/whisper-bin-x64.zip';
 
 let currentModel = process.env.WHISPER_LOCAL_MODEL || 'small.en';
 let isDownloading = false;
@@ -56,22 +61,119 @@ export function getModelPath(modelName = currentModel): string {
 }
 
 /**
- * Returns current status of local Whisper model storage.
+ * Checks if a whisper.cpp executable binary exists in app bin dir or system PATH.
+ */
+export function isWhisperBinaryDownloaded(): boolean {
+  if (process.env.WHISPER_CPP_BINARY && fs.existsSync(process.env.WHISPER_CPP_BINARY)) {
+    return true;
+  }
+
+  try {
+    const binDir = path.join(getAppPaths().userDataDir, 'bin');
+    const appBinCandidates = [
+      path.join(binDir, 'whisper-cli.exe'),
+      path.join(binDir, 'main.exe'),
+      path.join(binDir, 'whisper.exe'),
+      path.join(binDir, 'whisper-cli'),
+      path.join(binDir, 'main'),
+      path.join(binDir, 'whisper'),
+      path.join(binDir, 'whisper-bin-x64', 'whisper-cli.exe'),
+      path.join(binDir, 'whisper-bin-x64', 'main.exe'),
+      path.join(binDir, 'whisper.cpp', 'whisper-cli.exe'),
+    ];
+    for (const candidate of appBinCandidates) {
+      if (fs.existsSync(candidate)) return true;
+    }
+  } catch {
+    // ignore
+  }
+
+  return false;
+}
+
+/**
+ * Downloads prebuilt Whisper Windows executable binary zip and extracts it into %APPDATA%\Saira\bin\
+ */
+export async function downloadWhisperBinary(): Promise<boolean> {
+  const binDir = path.join(getAppPaths().userDataDir, 'bin');
+  if (!fs.existsSync(binDir)) {
+    fs.mkdirSync(binDir, { recursive: true });
+  }
+
+  if (isWhisperBinaryDownloaded()) {
+    console.log('[Whisper Binary Download] Whisper executable binary is already present.');
+    return true;
+  }
+
+  console.log('[Whisper Binary Download] Starting download of Whisper executable binary for Windows...');
+  try {
+    const res = await fetch(WHISPER_WINDOWS_BIN_URL);
+    if (!res.ok || !res.body) {
+      console.error(`[Whisper Binary Download Failed] HTTP ${res.status}: ${res.statusText}`);
+      return false;
+    }
+
+    const zipPath = path.join(os.tmpdir(), `whisper_windows_amd64_${Date.now()}.zip`);
+    const fileStream = fs.createWriteStream(zipPath);
+
+    const reader = res.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      fileStream.write(Buffer.from(value));
+    }
+    fileStream.end();
+
+    await new Promise<void>((resolve, reject) => {
+      fileStream.on('finish', resolve);
+      fileStream.on('error', reject);
+    });
+
+    console.log(`[Whisper Binary Download] Extracting zip to ${binDir}...`);
+    await new Promise<void>((resolve, reject) => {
+      const cmd = `Expand-Archive -Path "${zipPath.replace(/"/g, '`"')}" -DestinationPath "${binDir.replace(/"/g, '`"')}" -Force`;
+      const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true });
+      proc.on('close', (code) => {
+        try {
+          if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+        } catch {
+          // ignore
+        }
+        if (code === 0) resolve();
+        else reject(new Error(`Expand-Archive exited with code ${code}`));
+      });
+      proc.on('error', reject);
+    });
+
+    console.log('[Whisper Binary Download] Successfully extracted Whisper binary.');
+    return true;
+  } catch (err) {
+    console.error('[Whisper Binary Download Error]:', err);
+    return false;
+  }
+}
+
+/**
+ * Returns current status of local Whisper model storage and binary.
  */
 export function getWhisperStatus(): WhisperStatus {
-  const downloaded = isModelDownloaded(currentModel);
+  const modelDownloaded = isModelDownloaded(currentModel);
+  const binaryDownloaded = isWhisperBinaryDownloaded();
   const modelPath = getModelPath(currentModel);
 
   let statusText = 'Ready';
   if (isDownloading) {
     statusText = `Downloading Whisper model ${currentModel} (${currentProgress}%)...`;
-  } else if (!downloaded) {
+  } else if (!binaryDownloaded) {
+    statusText = 'Whisper executable binary missing.';
+  } else if (!modelDownloaded) {
     statusText = `Whisper model ${currentModel} not downloaded yet.`;
   }
 
   return {
     modelName: currentModel,
-    modelDownloaded: downloaded,
+    modelDownloaded,
+    binaryDownloaded,
     downloading: isDownloading,
     downloadProgress: currentProgress,
     statusText,
@@ -163,3 +265,4 @@ export async function downloadWhisperModel(
     return false;
   }
 }
+

@@ -1,6 +1,6 @@
 import { getOllamaStatus, pullLocalModel, type OllamaStatus } from './ollama-manager';
-import { getWhisperStatus, downloadWhisperModel, type WhisperStatus } from './whisper-manager';
-import { getPiperStatus, downloadPiperVoice, type PiperStatus } from './piper-manager';
+import { getWhisperStatus, downloadWhisperModel, downloadWhisperBinary, type WhisperStatus } from './whisper-manager';
+import { getPiperStatus, downloadPiperVoice, downloadPiperBinary, type PiperStatus } from './piper-manager';
 
 export interface SetupStatus {
   isComplete: boolean;
@@ -22,8 +22,8 @@ export async function getFullSetupStatus(): Promise<SetupStatus> {
   const piper = getPiperStatus();
 
   const ollamaReady = ollama.modelDownloaded || !ollama.running;
-  const whisperReady = whisper.modelDownloaded;
-  const piperReady = piper.voiceDownloaded;
+  const whisperReady = whisper.modelDownloaded && whisper.binaryDownloaded;
+  const piperReady = piper.voiceDownloaded && piper.binaryDownloaded;
   const isComplete = ollamaReady && whisperReady && piperReady;
 
   let overallProgress = 100;
@@ -38,9 +38,9 @@ export async function getFullSetupStatus(): Promise<SetupStatus> {
   if (!ollamaReady) {
     stepText = `Setting up Saira (1/3): Pulling Ollama LLM model (${ollama.downloadProgress}%)...`;
   } else if (!whisperReady) {
-    stepText = `Setting up Saira (2/3): Downloading Whisper STT model (${whisper.downloadProgress}%)...`;
+    stepText = `Setting up Saira (2/3): Downloading Whisper STT binary & model (${whisper.downloadProgress}%)...`;
   } else if (!piperReady) {
-    stepText = `Setting up Saira (3/3): Downloading Piper voice model (${piper.downloadProgress}%)...`;
+    stepText = `Setting up Saira (3/3): Downloading Piper TTS binary & voice model (${piper.downloadProgress}%)...`;
   }
 
   return {
@@ -80,26 +80,36 @@ export async function runFullSetupSequence(
       });
     }
 
-    // Step 2: Ensure Whisper local STT model is downloaded (~460MB, 20% weight)
+    // Step 2: Ensure Whisper local STT binary & model are downloaded (~460MB, 20% weight)
     const whisperStatus = getWhisperStatus();
+    if (!whisperStatus.binaryDownloaded) {
+      console.log('[Setup Manager] Step 2a of 3: Downloading Whisper executable binary for Windows...');
+      if (onProgress) onProgress(72, 'Step 2/3 (Whisper Binary): Downloading whisper-cli.exe...');
+      await downloadWhisperBinary();
+    }
     if (!whisperStatus.modelDownloaded) {
-      console.log('[Setup Manager] Step 2 of 3: Downloading local Whisper STT model...');
+      console.log('[Setup Manager] Step 2b of 3: Downloading local Whisper STT model...');
       await downloadWhisperModel(whisperStatus.modelName, (percent) => {
-        const overall = Math.round(70 + (percent / 100) * 20);
+        const overall = Math.round(74 + (percent / 100) * 16);
         if (onProgress) {
           onProgress(overall, `Step 2/3 (Whisper STT): ${percent}%`);
         }
       });
     }
 
-    // Step 3: Ensure Piper local TTS voice model is downloaded (~50-60MB, 10% weight)
+    // Step 3: Ensure Piper local TTS binary and voice model are downloaded (~50-60MB, 10% weight)
     const piperStatus = getPiperStatus();
+    if (!piperStatus.binaryDownloaded) {
+      console.log('[Setup Manager] Step 3a of 3: Downloading Piper executable binary for Windows...');
+      if (onProgress) onProgress(92, 'Step 3/3 (Piper Binary): Downloading piper.exe...');
+      await downloadPiperBinary();
+    }
     if (!piperStatus.voiceDownloaded) {
-      console.log('[Setup Manager] Step 3 of 3: Downloading local Piper TTS voice model...');
+      console.log('[Setup Manager] Step 3b of 3: Downloading local Piper TTS voice model...');
       await downloadPiperVoice(piperStatus.voiceName, (percent) => {
-        const overall = Math.round(90 + (percent / 100) * 10);
+        const overall = Math.round(95 + (percent / 100) * 5);
         if (onProgress) {
-          onProgress(overall, `Step 3/3 (Piper TTS): ${percent}%`);
+          onProgress(overall, `Step 3/3 (Piper Voice): ${percent}%`);
         }
       });
     }

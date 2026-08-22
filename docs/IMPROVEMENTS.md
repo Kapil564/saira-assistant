@@ -25,7 +25,14 @@ This document logs architectural and pipeline improvements made to **Saira Assis
   - **Instant Interruption Bridge**: Added `stopSpeech()` to [src/main/preload.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/main/preload.ts) and `stop-speech` IPC handler in [src/main/index.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/main/index.ts) to forward `stop_speech` socket events to the backend instantly.
   - **Immediate Barge-In Execution**: Updated [src/renderer/index.tsx](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/renderer/index.tsx) (`startRecording`, `handleSendText`, WebSpeech wake word, and offline VAD volume detection) to call `assistant.stopSpeech()` immediately when user input or voice energy is detected.
   - **Non-Parallel & Preempted Pipeline**: Refactored `QueuedTTS` in [src/providers/tts.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/providers/tts.ts) and pipeline handlers in [src/orchestrator/index.ts](file:///c:/Users/kapil/Desktop/space/saira-assistant/src/orchestrator/index.ts) to enforce single-threaded sequential TTS execution. Monotonic `activeRequestId` tracking drops stale STT/LLM responses.
-- **Impact**: Zero parallel TTS processing, instant audio cutoff as soon as user starts speaking, and zero speech stacking.
+- **Piper Local Neural TTS Enhancements**:
+  - **Sounds Natural**: Uses AI neural models (VITS/ONNX) to create smooth, human-like speech instead of the flat, robotic tone of legacy SAPI5.
+  - **Works Everywhere**: Runs cross-platform on Windows, Linux, macOS, and Raspberry Pi, whereas SAPI5 was strictly locked to Windows.
+  - **100+ Voice Options**: Offers hundreds of downloadable voices across dozens of languages and accents, replacing default system voices (David/Zira).
+  - **Consistent Quality**: Bundles the exact voice file chosen directly with the app, ensuring identical sound quality on every user's computer.
+  - **Easy Audio Control**: Generates raw audio files or streams (WAV/PCM) directly to code for simple processing, speed adjustment, and playback in Electron or Node.js.
+  - **Privacy & Offline**: Works 100% offline without needing internet or extra Windows system components.
+- **Impact**: Zero parallel TTS processing, instant audio cutoff as soon as user starts speaking, zero speech stacking, and high-quality neural voice speech output.
 
 ---
 

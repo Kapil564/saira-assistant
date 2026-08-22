@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('assistant', {
   hideWindow: () => ipcRenderer.send('hide-window'),
   resizeToOrb: () => ipcRenderer.send('resize-to-orb'),
   resizeToPanel: () => ipcRenderer.send('resize-to-panel'),
+  resizeToWidget: () => ipcRenderer.send('resize-to-widget'),
   sendAudio: (audio: ArrayBuffer) => ipcRenderer.send('send-audio', audio),
   sendText: (text: string) => ipcRenderer.send('send-text', text),
   stopSpeech: () => ipcRenderer.send('stop-speech'),

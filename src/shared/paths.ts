@@ -25,14 +25,8 @@ export function getUserDataDir(): string {
     return path.join(process.env.APPDATA, 'Saira');
   }
 
-  // Fallback using os.homedir()
-  const home = os.homedir();
-  if (process.platform === 'win32') {
-    return path.join(home, 'AppData', 'Roaming', 'Saira');
-  } else if (process.platform === 'darwin') {
-    return path.join(home, 'Library', 'Application Support', 'Saira');
-  }
-  return path.join(home, '.config', 'saira');
+  // Fallback using os.homedir() for Windows
+  return path.join(os.homedir(), 'AppData', 'Roaming', 'Saira');
 }
 
 export interface AppPaths {

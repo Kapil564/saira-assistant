@@ -1,14 +1,33 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
+import { spawn } from 'node:child_process';
 import { getAppPaths } from '../shared/paths';
 
 export interface PiperStatus {
   voiceName: string; // 'en_US-amy-medium' | 'en_US-lessac-medium' | 'en_GB-alan-medium'
   voiceDownloaded: boolean;
+  binaryDownloaded: boolean;
   downloading: boolean;
   downloadProgress: number; // 0 to 100
   statusText: string;
   voicePath: string;
+}
+
+export function isPiperBinaryDownloaded(): boolean {
+  if (process.env.PIPER_BINARY && fs.existsSync(process.env.PIPER_BINARY)) {
+    return true;
+  }
+  const binDir = path.join(getAppPaths().userDataDir, 'bin');
+  const candidates = [
+    path.join(binDir, 'piper.exe'),
+    path.join(binDir, 'piper-tts.exe'),
+    path.join(binDir, 'piper', 'piper.exe'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return true;
+  }
+  return false;
 }
 
 const VOICE_URLS: Record<string, { onnx: string; json: string }> = {
@@ -71,18 +90,20 @@ export function getVoicePath(voiceName = currentVoice): string {
  */
 export function getPiperStatus(): PiperStatus {
   const downloaded = isVoiceDownloaded(currentVoice);
+  const binaryDownloaded = isPiperBinaryDownloaded();
   const voicePath = getVoicePath(currentVoice);
 
   let statusText = 'Ready';
   if (isDownloading) {
     statusText = `Downloading Piper voice ${currentVoice} (${currentProgress}%)...`;
-  } else if (!downloaded) {
-    statusText = `Piper voice ${currentVoice} not downloaded yet.`;
+  } else if (!downloaded || !binaryDownloaded) {
+    statusText = `Piper setup pending (binary=${binaryDownloaded}, voice=${downloaded}).`;
   }
 
   return {
     voiceName: currentVoice,
     voiceDownloaded: downloaded,
+    binaryDownloaded,
     downloading: isDownloading,
     downloadProgress: currentProgress,
     statusText,
@@ -179,6 +200,73 @@ export async function downloadPiperVoice(
   } catch (err) {
     console.error(`[Piper Download Error] Failed downloading voice ${voiceName}:`, err);
     isDownloading = false;
+    return false;
+  }
+}
+
+const PIPER_WINDOWS_BIN_URL = 'https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip';
+
+/**
+ * Downloads Piper Windows binary zip and extracts piper.exe into %APPDATA%\Saira\bin\
+ */
+export async function downloadPiperBinary(): Promise<boolean> {
+  const binDir = path.join(getAppPaths().userDataDir, 'bin');
+  if (!fs.existsSync(binDir)) {
+    fs.mkdirSync(binDir, { recursive: true });
+  }
+
+  const piperExeCandidates = [
+    path.join(binDir, 'piper.exe'),
+    path.join(binDir, 'piper', 'piper.exe'),
+  ];
+  for (const candidate of piperExeCandidates) {
+    if (fs.existsSync(candidate)) return true;
+  }
+
+  console.log('[Piper Binary Download] Starting download of Piper executable binary for Windows...');
+  try {
+    const res = await fetch(PIPER_WINDOWS_BIN_URL);
+    if (!res.ok || !res.body) {
+      console.error(`[Piper Binary Download Failed] HTTP ${res.status}: ${res.statusText}`);
+      return false;
+    }
+
+    const zipPath = path.join(os.tmpdir(), `piper_windows_amd64_${Date.now()}.zip`);
+    const fileStream = fs.createWriteStream(zipPath);
+
+    const reader = res.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      fileStream.write(Buffer.from(value));
+    }
+    fileStream.end();
+
+    await new Promise<void>((resolve, reject) => {
+      fileStream.on('finish', resolve);
+      fileStream.on('error', reject);
+    });
+
+    console.log(`[Piper Binary Download] Extracting zip to ${binDir}...`);
+    await new Promise<void>((resolve, reject) => {
+      const cmd = `Expand-Archive -Path "${zipPath.replace(/"/g, '`"')}" -DestinationPath "${binDir.replace(/"/g, '`"')}" -Force`;
+      const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true });
+      proc.on('close', (code) => {
+        try {
+          if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+        } catch {
+          // ignore
+        }
+        if (code === 0) resolve();
+        else reject(new Error(`PowerShell Expand-Archive failed with code ${code}`));
+      });
+      proc.on('error', reject);
+    });
+
+    console.log('[Piper Binary Download] Successfully downloaded and extracted Piper executable.');
+    return true;
+  } catch (err) {
+    console.error('[Piper Binary Download Error] Failed to download or extract Piper binary:', err);
     return false;
   }
 }

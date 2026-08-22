@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { WakeOrb, type OrbPhase } from './components/WakeOrb';
+import { Windows11Widget } from './components/Windows11Widget';
 
 function encodeWav(samples: Float32Array, sampleRate = 16000): ArrayBuffer {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
@@ -83,7 +84,7 @@ function App() {
   const [wakeWordEnabled, setWakeWordEnabled] = useState(true);
   const [status, setStatus] = useState<string>('');
   const [inputText, setInputText] = useState('');
-  const [viewMode] = useState<'orb'>('orb');
+  const [viewMode, setViewMode] = useState<'orb' | 'widget'>('orb');
   const [orbPhase, setOrbPhase] = useState<OrbPhase>('idle');
 
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -265,6 +266,7 @@ function App() {
 
     const wavBuffer = encodeWav(pcm, 16000);
     setStatus('⚡ Transcribing...');
+    setOrbPhase('thinking');
     const assistant = (window as any).assistant;
     if (assistant?.sendAudio) {
       assistant.sendAudio(wavBuffer);
@@ -352,6 +354,9 @@ function App() {
     function startLocalAudioVad() {
       if (vadAudioCtxRef.current || isRecordingRef.current) return;
 
+      const startTime = Date.now();
+      const WARMUP_DURATION_MS = 1500; // Ignore mic init audio pop/spikes for first 1.5s
+
       navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         vadStreamRef.current = stream;
         const ctx = new AudioContext();
@@ -366,6 +371,13 @@ function App() {
 
         const checkVolume = () => {
           if (!wakeWordEnabled || isRecordingRef.current || !vadAudioCtxRef.current) return;
+
+          // Ignore noise during mic initialization warmup period
+          if (Date.now() - startTime < WARMUP_DURATION_MS) {
+            requestAnimationFrame(checkVolume);
+            return;
+          }
+
           analyser.getByteFrequencyData(dataArray);
 
           let sum = 0;
@@ -374,9 +386,10 @@ function App() {
           }
           const averageVolume = sum / dataArray.length;
 
-          if (averageVolume > 45) {
+          // Require natural voice threshold (55) and sustained energy (8 frames ~ 150ms) after warmup
+          if (averageVolume > 55) {
             activeEnergyCount++;
-            if (activeEnergyCount >= 5) {
+            if (activeEnergyCount >= 8) {
               console.log('[Offline VAD] Clear voice activity detected. Auto-triggering recording...');
               startRecording();
               activeEnergyCount = 0;
@@ -405,13 +418,13 @@ function App() {
     };
   }, [wakeWordEnabled]);
 
-  const handleSendText = (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!inputText.trim()) return;
+  const handleSendText = (textOverride?: string) => {
+    const text = (textOverride || inputText).trim();
+    if (!text) return;
 
-    const text = inputText.trim();
     setInputText('');
     setStatus('🧠 Processing request...');
+    setOrbPhase('thinking');
 
     const assistant = (window as any).assistant;
     if (assistant?.stopSpeech) assistant.stopSpeech();
@@ -446,6 +459,7 @@ function App() {
       if (data.text) {
         addMessage('user', data.text);
         setStatus('🧠 Thinking...');
+        setOrbPhase('thinking');
       } else {
         setStatus('');
         setOrbPhase('idle');
@@ -477,24 +491,34 @@ function App() {
     };
   }, [viewMode]);
 
-  useEffect(() => {
+  const toggleViewMode = () => {
+    const nextMode = viewMode === 'orb' ? 'widget' : 'orb';
+    setViewMode(nextMode);
     const assistant = (window as any).assistant;
-    if (assistant?.resizeToOrb) {
+    if (nextMode === 'widget' && assistant?.resizeToWidget) {
+      assistant.resizeToWidget();
+    } else if (nextMode === 'orb' && assistant?.resizeToOrb) {
       assistant.resizeToOrb();
     }
-  }, []);
+  };
+
+  useEffect(() => {
+    const assistant = (window as any).assistant;
+    if (viewMode === 'widget' && assistant?.resizeToWidget) {
+      assistant.resizeToWidget();
+    } else if (assistant?.resizeToOrb) {
+      assistant.resizeToOrb();
+    }
+  }, [viewMode]);
+
+  const lastSairaMsg = messages.filter((m) => m.from === 'saira').slice(-1)[0]?.text;
+  const lastUserMsg = messages.filter((m) => m.from === 'user').slice(-1)[0]?.text;
 
   return (
     <WakeOrb
       phase={orbPhase}
-      size={130}
-      onClick={() => {
-        if (listening) {
-          stopRecording();
-        } else {
-          startRecording();
-        }
-      }}
+      size={100}
+      onClick={toggleRecording}
     />
   );
 }

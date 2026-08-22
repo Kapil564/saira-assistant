@@ -6,15 +6,26 @@
   "author": "Kapil564",
   "license": "MIT",
   "scripts": {
-    "dev": "tsup --watch",
+    "dev": "tsup --watch --onSuccess \"electronmon .\"",
     "build": "tsup",
-    "start": "electron .",
+    "start": "electronmon .",
     "prepack": "pnpm build",
     "pack": "electron-builder",
     "lint": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "rebuild": "electron-rebuild"
+  },
+  "electronmon": {
+    "patterns": [
+      "!*.log",
+      "!*.txt",
+      "!log.txt",
+      "!*.wav",
+      "!*.tmp",
+      "!assistant.db*",
+      "!.env*"
+    ]
   },
   "dependencies": {
     "@google/generative-ai": "^0.16.0",
@@ -42,7 +53,9 @@
     "@types/react-dom": "^18.3.0",
     "@types/ws": "^8.5.10",
     "drizzle-kit": "^0.22.0",
+    "electron": "^31.7.7",
     "electron-builder": "^24.13.0",
+    "electronmon": "^2.0.4",
     "node-gyp": "^13.0.1",
     "tailwindcss": "^3.4.0",
     "tsup": "^8.0.0",

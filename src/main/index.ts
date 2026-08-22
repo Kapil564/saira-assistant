@@ -42,16 +42,16 @@ function getAppIcon() {
   return nativeImage.createEmpty();
 }
 
-function positionTopRight() {
+function positionTopLeft() {
   if (!window) return;
   try {
     const primaryDisplay = screen.getPrimaryDisplay();
-    const { width: workWidth, x: workX, y: workY } = primaryDisplay.workArea;
-    const x = Math.round(workX + workWidth - 150); // 130px orb width + 20px padding
-    const y = Math.round(workY + 20); // 20px padding from top
+    const { x: workX, y: workY } = primaryDisplay.workArea;
+    const x = Math.round(workX + 24); // 24px padding from top-left
+    const y = Math.round(workY + 24); // 24px padding from top-left
     window.setPosition(x, y);
   } catch (err) {
-    console.error('[Main] Failed to position window in top-right:', err);
+    console.error('[Main] Failed to position window in top-left:', err);
   }
 }
 
@@ -105,8 +105,8 @@ function updateTrayMenu() {
 
 function createWindow() {
   window = new BrowserWindow({
-    width: 130,
-    height: 130,
+    width: 100,
+    height: 100,
     show: false,
     frame: false,
     transparent: true,
@@ -121,7 +121,7 @@ function createWindow() {
     },
   });
 
-  positionTopRight();
+  positionTopLeft();
   window.loadFile(path.join(__dirname, '../../index.html'));
 
   window.webContents.on('console-message', (_event, _level, message) => {
@@ -147,7 +147,7 @@ function toggleWindow() {
   if (window?.isVisible()) {
     window.hide();
   } else {
-    positionTopRight();
+    positionTopLeft();
     window?.show();
     window?.focus();
     window?.webContents.send('window-shown');
@@ -260,15 +260,27 @@ ipcMain.on('hide-window', () => {
 ipcMain.on('resize-to-orb', () => {
   if (window) {
     window.setResizable(true);
-    window.setSize(130, 130, true);
+    window.setSize(100, 100, true);
     window.setResizable(false);
+    positionTopLeft();
   }
 });
 
 ipcMain.on('resize-to-panel', () => {
   if (window) {
-    window.setSize(130, 130, true);
+    window.setResizable(true);
+    window.setSize(640, 240, true);
     window.setResizable(false);
+    positionTopLeft();
+  }
+});
+
+ipcMain.on('resize-to-widget', () => {
+  if (window) {
+    window.setResizable(true);
+    window.setSize(640, 240, true);
+    window.setResizable(false);
+    positionTopLeft();
   }
 });
 
